@@ -5122,8 +5122,8 @@ int main(int argc, char** argv) {
     std::unique_ptr<strata::spec::NgramMod> ngram_mod_pool;
     if (ngram_mod_on) ngram_mod_pool = std::make_unique<strata::spec::NgramMod>((int32_t) g.n_vocab);
     if (mtp_adaptive)
-        std::fprintf(stderr, "strata-x mtp-adaptive: enabled=1 min=3 max=6 rounds=3 grow=80 shrink=65 batch=%d solo=%d\n",
-                     (int) o.batch, o.batch == 0 ? 1 : 0);
+        std::fprintf(stderr, "strata-x mtp-adaptive: enabled=1 min=3 max=6 rounds=3 grow=80 shrink=65 batch=%d\n",
+                     (int) o.batch);
     if (ngram_mod_pool)
         std::fprintf(stderr, "strata-x ngram-mod: enabled=1 bytes=%zu batch=%d\n",
                      ngram_mod_pool->size_bytes(), (int) o.batch);
@@ -14529,11 +14529,27 @@ int main(int argc, char** argv) {
                 }
                 if (first_window) T = merge_T > 0 ? merge_T : 1;
                 const bool merged = first_window && merge_T > 0;   // the prompt's last tokens and the first token
+                // STRATA-X: a solo request's shared n-gram chain takes the window (the MTP drafts are already
+                // `--spec` wide, so there is no room to append them; a slot in batch replaces them too)
+                int ngram_n = 0;
+                bool from_ngram = false;
+                if (ngram_mod_pool && !first_window && !merged) {
+                    const int want_ng = std::min(S - 1, mtp_adaptive ? solo_adaptive.depth() : S - 1);
+                    if (want_ng > 0) {
+                        ngram_n = ngram_mod_pool->propose(ngram_state, ngram_hist, want_ng, ngram_buf.data());
+                        if (ngram_n >= 2) {   // a single token is not worth a speculative window
+                            T = 1 + ngram_n;
+                            from_ngram = true;
+                        } else {
+                            ngram_n = 0;
+                        }
+                    }
+                }
                 // a repeat of earlier context (prompt lookup) where the MTP's own first guess agrees: the policy takes it
                 // when its expected tokens per ms, from the measured acceptance and window costs, beat the MTP window's
                 bool from_sfx = false;
                 int sfx_match = 0;
-                if (o.suffix_draft > 0 && !first_window) {
+                if (o.suffix_draft > 0 && !first_window && !from_ngram) {
                     const int k = sfx.propose(S - 1, sbuf.data());
                     sfx_match = sfx.last_match();
                     if (k > 0 && (!use_mtp || sbuf[0] == drafts[0])) {
@@ -14543,7 +14559,7 @@ int main(int argc, char** argv) {
                 }
                 // --lookup-chain: what followed an earlier occurrence of the context + the MTP's drafts, after them
                 int chain_n = 0, cm = 0;
-                if (o.lookup_chain > 0 && !first_window && !from_sfx && T < S) {
+                if (o.lookup_chain > 0 && !first_window && !from_ngram && !from_sfx && T < S) {
                     int csrc = -1;
                     const int nt = chain_tail(sfx, drafts.data(), T - 1, ctail);
                     chain_n = strata::spec::propose_from_sources(lookup_src, ctail.data(), nt, T - 1,
@@ -14558,21 +14574,19 @@ int main(int argc, char** argv) {
                 }
                 const int T_mtp = T;
                 T += chain_n;
-                int ngram_n = 0;   // STRATA-X: the shared n-gram chain after the MTP's drafts and the lookup chain
-                if (ngram_mod_pool && !first_window && T < S) {
-                    ngram_n = ngram_mod_pool->propose(ngram_state, ngram_hist, std::min(S - T, 8), ngram_buf.data());
-                    T += ngram_n;
-                }
                 const bool timed_round = !first_window;
                 const Clock::time_point round0 = Clock::now();
                 if (p + T > o.max_context) break;
                 window[0] = x;
-                for (int i = 1; i < T_mtp; ++i)
-                    window[(size_t) i] = merged     ? (int32_t) ids[(size_t) (p + i)]
-                                         : from_sfx ? sbuf[(size_t) i - 1]
-                                                    : drafts[(size_t) i - 1];
-                for (int i = 0; i < chain_n; ++i) window[(size_t) (T_mtp + i)] = cbuf[(size_t) i];
-                for (int i = 0; i < ngram_n; ++i) window[(size_t) (T_mtp + chain_n + i)] = ngram_buf[(size_t) i];
+                if (from_ngram) {
+                    for (int i = 1; i < T; ++i) window[(size_t) i] = ngram_buf[(size_t) i - 1];
+                } else {
+                    for (int i = 1; i < T_mtp; ++i)
+                        window[(size_t) i] = merged     ? (int32_t) ids[(size_t) (p + i)]
+                                             : from_sfx ? sbuf[(size_t) i - 1]
+                                                        : drafts[(size_t) i - 1];
+                    for (int i = 0; i < chain_n; ++i) window[(size_t) (T_mtp + i)] = cbuf[(size_t) i];
+                }
                 drive.d.layers = 0;
                 drive.d.experts = 0;
                 drive.d.failed = false;
@@ -14658,7 +14672,8 @@ int main(int argc, char** argv) {
                 // STRATA_SPEC_PROB: the MTP drafts' distributions q, judged by rejection sampling (core/spec_prob.hpp);
                 // a suffix window and the lookup chain's tail are point masses and keep the exact-match rule
                 // (never on a first window: a merged one holds prompt tokens, not drafts)
-                if (use_mtp && mtp.prob() && !from_sfx && !first_window && T_mtp > 1) ver.set_spec_q(mtp.spec_q(), T_mtp - 1);
+                if (use_mtp && mtp.prob() && !from_sfx && !from_ngram && !first_window && T_mtp > 1)
+                    ver.set_spec_q(mtp.spec_q(), T_mtp - 1);
                 if (!ver.run(T, window.data(), p, win_pool_fn, win_pool_user, outv.data(), err) || drive.d.failed) {
                     std::printf("ERR %s\n", drive.d.failed && drive.d.fail ? drive.d.fail : err.c_str());
                     return 1;
@@ -14686,21 +14701,23 @@ int main(int argc, char** argv) {
                 while (a < T - 1 && window[(size_t) a + 1] == outv[(size_t) a]) ++a;
                 if (from_sfx) { ++sfx_windows; sfx_drafts += T - 1; sfx_ok += a; }
                 if (chain_n > 0) { ++chain_windows; chain_drafts += chain_n; chain_ok += std::max(0, a - (T_mtp - 1)); }
-                if (ngram_n > 0) {   // STRATA-X: feedback is the verified prefix, not the whole chain
-                    const int ng_ok = std::max(0, a - (T_mtp - 1) - chain_n);
-                    ngram_offered += ngram_n;
-                    ngram_accepted += ng_ok;
-                    ngram_mod_pool->observe(ngram_state, ng_ok, ngram_n);
+                if (from_ngram) {   // STRATA-X: feedback is the verified prefix, not the whole chain
+                    ngram_offered += T - 1;
+                    ngram_accepted += a;
+                    ngram_mod_pool->observe(ngram_state, a, T - 1);
                 }
-                if (use_mtp && !merged && !first_window && !from_sfx && chain_n == 0 && ngram_n == 0) {
-                    // STRATA-X: a pure-MTP solo round feeds the adaptive depth (as a batch slot does)
+                if (use_mtp && !merged && !first_window && !from_sfx && !from_ngram && chain_n == 0) {
+                    // STRATA-X: a pure-MTP solo round feeds the adaptive depth (as a batch slot does).  The
+                    // --spec-min-p gate routinely clips a window below the depth, so `requested` is the depth and
+                    // `offered` what the gate let through: the acceptance is token weighted over the real offers.
                     const int offered_drafts = T_mtp - 1;
-                    const bool eligible = offered_drafts == solo_adaptive.depth() && offered_drafts > 0 &&
-                                          produced_n + 1 + offered_drafts <= max_new &&
-                                          p + 1 + offered_drafts <= o.max_context;
-                    solo_adaptive.observe(offered_drafts, offered_drafts, a, eligible);
+                    const int wanted = solo_adaptive.depth();
+                    const bool eligible = offered_drafts > 0 &&
+                                          produced_n + 1 + wanted <= max_new &&
+                                          p + 1 + wanted <= o.max_context;
+                    solo_adaptive.observe(wanted, offered_drafts, std::min(a, offered_drafts), eligible);
                 }
-                if (!from_sfx && !first_window)
+                if (!from_sfx && !first_window && !from_ngram)
                     for (int d = 0; d < T_mtp - 1 && d < 8 && d <= a; ++d) { ++dp_tested[d]; dp_ok[d] += d < a; }
                 if (strata::core::MtpDrafter::top2_env() && !from_sfx && !first_window && a < T_mtp - 1 && a < 8) {
                     ++t2_rej[a];
