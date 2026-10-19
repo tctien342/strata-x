@@ -8,6 +8,7 @@ defaults stay upstream-identical unless noted, and every divergence is listed he
 | --- | --- | --- |
 | INT8 rotated K/V | on in the serving layer | run config `env` `STRATA_KV_ROT=0` |
 | Conversation cache | 8192 MiB parked conversations | `conversation_cache_mib` (0 disables) |
+| STRATA-X console | on (product UI) | static assets under `serve/web/` |
 
 ## Defaults and rationale
 
@@ -27,3 +28,9 @@ were qualified with; the unrotated layout remains one config override away.
 `--conversation-cache-mib` when the config's raw args do not already carry one, so an explicit
 `0` is preserved and an explicit engine argument wins. The engine-side default stays upstream's
 `0` (off); only the serving layer parks conversations by default.
+
+The console replaces upstream's index page with the STRATA-X chat/monitor shell: the
+terminal layout, six gauges, conversation-cache settings card and the Three.js r180 expert
+cube (vendored locally, `THREE-LICENSE.txt`). Upstream's `app.js` is retained but no longer
+referenced. The upstream engine does not publish per-expert residency telemetry yet, so the
+monitor keeps its honest "awaiting residency telemetry" state instead of inventing cells.

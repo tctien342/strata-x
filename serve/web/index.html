@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Strata</title>
-<link rel="icon" href="web/favicon.svg" type="image/svg+xml">
+<title>STRATA-X</title>
 <link rel="stylesheet" href="web/tokens.css">
 <link rel="stylesheet" href="web/components.css">
 <link rel="stylesheet" href="web/app.css">
+<link rel="stylesheet" href="web/console-monitor-cube-860666ddb996.css">
 <script>
   // the theme before the first paint: the saved choice, else the system's
   try {
@@ -16,15 +16,14 @@
     document.documentElement.dataset.theme = t;
   } catch (e) {}
 </script>
+<link rel="stylesheet" href="web/cache-settings-2316ae3cd5cf.css">
 </head>
 <body>
 <header class="st-header">
-  <span class="st-header__brand">Strata</span>
+  <span class="st-header__brand"><b>STRATA-X</b></span>
   <nav class="st-tabs" role="tablist" aria-label="Views">
     <button class="st-tab" role="tab" id="tab-btn-chat" aria-controls="view-chat" aria-selected="true" data-tab="chat">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-chat"/></svg>Chat</button>
-    <button class="st-tab" role="tab" id="tab-btn-images" aria-controls="view-images" aria-selected="false" data-tab="images" hidden>
-      <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-image"/></svg>Images</button>
     <button class="st-tab" role="tab" id="tab-btn-monitor" aria-controls="view-monitor" aria-selected="false" data-tab="monitor">
       <svg class="st-icon st-icon--sm"><use href="web/sprite.svg#i-activity"/></svg>Monitor</button>
     <button class="st-tab" role="tab" id="tab-btn-about" aria-controls="view-about" aria-selected="false" data-tab="about">
@@ -73,106 +72,56 @@
     </div>
   </section>
 
-  <!-- ============================ Images ============================ -->
-  <section class="view view--images" id="view-images" role="tabpanel" aria-labelledby="tab-btn-images" hidden>
-    <div class="about">
-      <form class="st-card img-form" id="img-form">
-        <span class="card-title" id="img-title">Make an image</span>
-        <textarea class="st-input img-prompt" id="img-prompt" rows="3" placeholder="Describe the image&hellip;" aria-label="Prompt"></textarea>
-        <div class="img-row">
-          <label class="st-field">Size
-            <select class="st-input" id="img-size">
-              <option>1024x1024</option><option>1536x1024</option><option>1024x1536</option>
-              <option>768x768</option><option>512x512</option></select></label>
-          <label class="st-field">Seed
-            <input class="st-input" id="img-seed" type="number" min="0" placeholder="random"></label>
-          <button type="submit" class="st-btn st-btn--primary" id="img-go">Generate</button>
-        </div>
-        <span class="composer-hint" id="img-hint">One image at a time; a chat request waits for it (and the other way round).</span>
-      </form>
-      <div class="img-results" id="img-results"></div>
-    </div>
-  </section>
-
   <!-- ============================ Monitor ============================ -->
   <section class="view view--monitor" id="view-monitor" role="tabpanel" aria-labelledby="tab-btn-monitor" hidden>
-    <div class="monitor">
-      <div class="st-card state-card">
-        <div class="state-card__head">
-          <span class="card-title">Model state</span>
-          <span class="badges" id="state-badges">
-            <span class="st-badge" data-s="idle">Idle</span>
-            <span class="st-badge st-badge--reading" data-s="reading">Reading</span>
-            <span class="st-badge st-badge--generating" data-s="generating">Generating</span>
-            <span class="st-badge st-badge--queued" data-s="queued">Queued</span>
-            <span class="st-badge st-badge--error" data-s="error">Error</span>
-          </span>
-        </div>
-        <div class="state-card__row"><span id="state-label">Waiting for a request</span><span class="muted" id="state-detail"></span></div>
-        <div class="st-progress" id="state-progress"><div class="st-progress__bar" id="state-bar" style="width:0%"></div></div>
-      </div>
-
-      <div class="metrics" id="metrics">
-        <!-- filled by app.js: Speed, GPU load, VRAM, GPU temp, Power, PCIe, CPU, Disk read -->
-      </div>
-
-      <div class="monitor-row">
-        <div class="st-card ctx-card">
-          <span class="card-title">Context fill</span>
-          <div class="ctx-gauge">
-            <svg class="st-gauge" viewBox="0 0 120 120" aria-hidden="true">
-              <circle class="st-gauge__track" cx="60" cy="60" r="50" fill="none" stroke-width="10" stroke-linecap="round"
-                      stroke-dasharray="235.6 314.2" transform="rotate(135 60 60)"/>
-              <circle class="st-gauge__fill" id="ctx-fill" cx="60" cy="60" r="50" fill="none" stroke-width="10"
-                      stroke-linecap="round" stroke-dasharray="0 314.2" transform="rotate(135 60 60)"/>
-            </svg>
-            <div class="ctx-gauge__label"><span class="ctx-gauge__pct" id="ctx-pct">0%</span><span class="muted" id="ctx-sub">&ndash;</span></div>
+    <div class="console-grid">
+      <div class="console-left">
+        <section class="console-panel residency-panel" aria-labelledby="moe-title">
+          <header class="console-panel-head"><div><span class="console-index">01 / ROUTING MAP</span><h1 id="moe-title">MoE Expert Residency Matrix</h1></div><span class="console-status" id="moe-live">CONNECTING</span></header>
+          <div class="matrix-meta"><span id="matrix-model">Waiting for engine</span><span id="matrix-shape">ALL EXPERTS / ALL LAYERS</span></div>
+          <div class="matrix-legend">
+            <div data-state="3"><span><i></i>Cached and active</span><strong id="moe-count-3">—</strong></div>
+            <div data-state="1"><span><i></i>Cached and idle</span><strong id="moe-count-1">—</strong></div>
+            <div data-state="2"><span><i></i>Loading/evicting</span><strong id="moe-count-2">—</strong></div>
+            <div data-state="0"><span><i></i>Not resident</span><strong id="moe-count-0">—</strong></div>
           </div>
-          <div class="bar-row"><span>Experts in VRAM</span><span class="muted" id="slots-text">&ndash;</span></div>
-          <div class="st-progress"><div class="st-progress__bar" id="slots-bar" style="width:0%"></div></div>
-          <div class="bar-row"><span>System RAM</span><span class="muted" id="ram-text">&ndash;</span></div>
-          <div class="st-progress" id="ram-progress"><div class="st-progress__bar" id="ram-bar" style="width:0%"></div></div>
-          <div class="bar-row"><span>GPU temperature</span><span class="muted" id="temp-text">&ndash;</span></div>
-          <div class="st-progress" data-tone="warn"><div class="st-progress__bar" id="temp-bar" style="width:0%"></div></div>
-        </div>
-        <div class="st-card req-card">
-          <div class="req-head"><span class="card-title">Recent requests</span>
-            <button class="st-btn st-btn--secondary" id="req-all" hidden>Show all</button></div>
-          <div class="table-wrap" id="req-wrap">
-            <table class="st-table">
-              <thead><tr><th>Time</th><th>Status</th><th class="num">Prompt</th><th class="num">Reused</th><th class="num">Output</th>
-                <th class="num" title="New prompt tokens per second, excluding reused cache tokens (engine prompt time)">Prefill t/s</th><th class="num">Decode t/s</th><th class="num" title="While writing the answer: the share of the experts looked up that were already in VRAM. Experts the GPU read over PCIe (--pcie-frac) are not counted in it; their share of all routed experts is shown after it (+N% PCIe)">VRAM hit rate</th><th class="num">Duration</th></tr></thead>
-              <tbody id="req-body"><tr><td colspan="9" class="muted">No requests yet</td></tr></tbody>
-            </table>
-          </div>
-          <p class="muted req-totals" id="req-totals"></p>
-        </div>
+          <div class="matrix-surface"><canvas id="moe-cube" tabindex="0" role="img" aria-label="3D expert residency cube" aria-describedby="moe-detail moe-note" hidden></canvas><div class="cube-hud" aria-hidden="true"><span id="cube-phase">RESIDENCY VOLUME</span><span>VOXEL VOLUME / ONE MODEL</span></div><div class="cube-controls"><div class="cube-zoom" role="group" aria-label="Cube zoom"><button id="cube-zoom-out" aria-label="Zoom cube out">−</button><button id="cube-zoom-reset" aria-label="Reset cube view">100%</button><button id="cube-zoom-in" aria-label="Zoom cube in">+</button></div><button id="cube-rotate" class="cube-rotate" aria-pressed="true" title="Pause automatic cube rotation" hidden>AUTO ROTATE</button></div><canvas id="moe-grid" tabindex="0" role="img" aria-label="All-expert residency matrix" aria-describedby="moe-detail moe-note"></canvas><div id="moe-empty">Awaiting residency telemetry<span>No simulated activity</span></div></div>
+          <div class="matrix-inspector"><span id="moe-detail" role="status">Hover or use arrow keys to inspect a cell</span><span id="moe-range">—</span></div>
+          <footer class="console-panel-foot" id="moe-note"><span>ACTIVITY → OPACITY <i class="opacity-scale"></i></span><span>ALL GPUS · DRAFT CACHE EXCLUDED</span></footer>
+        </section>
+        <section class="console-panel terminal-panel" aria-labelledby="terminal-title">
+          <header class="terminal-head"><h2 id="terminal-title"><span class="console-index">02 /</span> EVENT STREAM<span class="terminal-cursor" aria-hidden="true">_</span></h2><div class="terminal-tools"><button data-log-filter="all" aria-pressed="true">All</button><button data-log-filter="request" aria-pressed="false">Requests</button><button data-log-filter="slot" aria-pressed="false">Slots</button><button id="req-all" aria-pressed="false">History</button></div></header>
+          <div class="terminal-columns"><span>TIME</span><span>EVENT</span><span>REQUEST / OBSERVED STATE</span></div>
+          <div id="event-lines" aria-label="Latest events first"></div>
+          <footer class="terminal-footer"><span id="event-summary">Connecting to telemetry</span><div><button id="event-newer" aria-label="Newer events">↑</button><span id="event-page">01 / 01</span><button id="event-older" aria-label="Older events">↓</button></div></footer>
+        </section>
       </div>
+      <aside class="console-right" aria-label="Engine telemetry and parallel slots">
+        <section class="console-panel telemetry-panel" aria-labelledby="telemetry-title">
+          <header class="console-panel-head"><div><span class="console-index">03 / SYSTEM TELEMETRY</span><h2 id="telemetry-title">Engine vitals</h2></div><span class="console-status" id="telemetry-status">CONNECTING</span></header>
+          <div class="throughput-readout"><div><span class="console-label" id="decode-caption">DECODE / LIVE</span><strong id="console-decode">—</strong><span class="console-unit">TOK/S</span></div><div class="prefill-readout"><span class="console-label" id="prefill-caption">PREFILL / LAST</span><strong id="console-prefill">—</strong><span class="console-unit">TOK/S</span></div></div>
+          <div class="chart-caption"><span>LIVE / SIX CHANNELS</span><span class="console-dim">ALL 3 GPUS</span></div>
+          <div id="telemetry-gauges" class="telemetry-gauges" aria-label="Six semicircle telemetry gauges"></div>
+          <div id="gpu-vitals" aria-label="Text GPUs and auxiliary3060Ti"></div>
+          <div class="vitals-secondary"><div><span class="console-label" title="Total GPU power across all three cards">POWER</span><strong id="console-power">—</strong></div><div><span class="console-label">CPU</span><strong id="console-cpu">—</strong></div><div><span class="console-label">RAM</span><strong id="console-ram">—</strong></div><div><span class="console-label">DISK READ</span><strong id="console-disk">—</strong></div></div>
+          <footer class="console-panel-foot"><span id="console-pcie">PCIe —</span><span id="console-experts">— CACHED</span></footer>
+        </section>
+        <section class="console-panel slot-section console-slots" aria-labelledby="slot-title"><header><h2 id="slot-title"><span class="console-index">04 /</span> PARALLEL SLOTS</h2><span id="slot-summary">0 / 2</span></header><div id="slot-grid" class="console-slot-grid"></div></section>
+      </aside>
+    </div>
+    <footer class="console-footer"><span><i></i> STRATA-X <span id="console-version">—</span> / LOCAL INFERENCE</span><span id="console-connection">CONNECTING</span><time id="console-clock">—</time></footer>
+  </section>
 
-      <div class="st-card cc-card" id="cc-card">
-        <div class="req-head"><span class="card-title">Conversation cache</span><span class="muted small" id="cc-sum"></span></div>
-        <div class="cc-bars" id="cc-bars" hidden>
-          <div><div class="bar-row"><span>Parked conversations</span><span class="muted" id="cc-slots-text">&ndash;</span></div>
-            <div class="st-progress"><div class="st-progress__bar" id="cc-slots-bar" style="width:0%"></div></div></div>
-          <div><div class="bar-row"><span>Their memory (RAM)</span><span class="muted" id="cc-mem-text">&ndash;</span></div>
-            <div class="st-progress"><div class="st-progress__bar" id="cc-mem-bar" style="width:0%"></div></div></div>
-        </div>
-        <dl class="facts" id="cc-facts"></dl>
-        <p class="muted small cc-note" id="cc-note"></p>
-      </div>
-
+  <!-- ============================ About ============================ -->
+  <section class="view view--about" id="view-about" role="tabpanel" aria-labelledby="tab-btn-about" hidden>
+    <div class="about">
       <div class="st-card mcp-card" id="mcp-card" hidden>
         <div class="req-head"><span class="card-title">MCP servers</span><span class="muted small" id="mcp-sum"></span></div>
         <div class="mcp-list" id="mcp-list"></div>
         <p class="muted small mcp-note">Their tools run on this PC with your rights, when the model decides to call them
           (in this page's chat only; switch it off in Sampling).</p>
       </div>
-    </div>
-  </section>
 
-  <!-- ============================ About ============================ -->
-  <section class="view view--about" id="view-about" role="tabpanel" aria-labelledby="tab-btn-about" hidden>
-    <div class="about">
       <div class="st-card">
         <span class="card-title">Model and engine</span>
         <dl class="facts" id="facts-engine"></dl>
@@ -262,6 +211,9 @@
 </aside>
 <div class="scrim" id="scrim" hidden></div>
 <div class="st-toasts" id="toasts" aria-live="polite"></div>
-<script src="web/app.js"></script>
+<script src="web/console-monitor-cube-951fea94d933.js"></script>
+<script type="module" src="web/expert-cube-cube-19409e0630f7.js"></script>
+<script src="web/app-terminal-101393604a53.js"></script>
+<script src="web/cache-settings-528e4fd815fe.js"></script>
 </body>
 </html>

@@ -1,0 +1,4 @@
+/* Keep the RAM budget readable beside long settings labels. */
+@media (min-width: 1001px) {
+  .cfg-form { grid-template-columns: minmax(0, 3fr) minmax(140px, 2fr); }
+}
