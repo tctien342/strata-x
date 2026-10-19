@@ -5117,6 +5117,11 @@ int main(int argc, char** argv) {
         (ngram_env != nullptr && ngram_env[0] != '\0' && ngram_env[0] != '0'));
     std::unique_ptr<strata::spec::NgramMod> ngram_mod_pool;
     if (ngram_mod_on) ngram_mod_pool = std::make_unique<strata::spec::NgramMod>((int32_t) g.n_vocab);
+    if (mtp_adaptive)
+        std::fprintf(stderr, "strata-x mtp-adaptive: enabled=1 min=3 max=6 rounds=3 grow=80 shrink=65\n");
+    if (ngram_mod_pool)
+        std::fprintf(stderr, "strata-x ngram-mod: enabled=1 bytes=%zu slots=%d\n",
+                     ngram_mod_pool->size_bytes(), (int) o.batch);
     if (batch_mtp) {
         // (--pipeline-windows is already off with --batch slots)
         const char* why = o.batch < 2 ? "it needs --batch 2 or more" : o.mtp.empty() ? "it needs --mtp"
@@ -10659,12 +10664,6 @@ int main(int argc, char** argv) {
                     }
                 }).detach();
         }
-        if (mtp_adaptive)
-            std::printf("INFO mtp_adaptive=1 adaptive_min=3 adaptive_max=6 adaptive_initial=3 adaptive_rounds=3 "
-                        "adaptive_grow_percent=80 adaptive_shrink_percent=65\n");
-        if (ngram_mod_pool)
-            std::printf("INFO ngram_mod=1 entries=4194304 bytes=%zu slots=%zu\n",
-                        ngram_mod_pool->size_bytes(), (size_t) o.batch);
         // Strata-X: read the parked conversations this namespace parked, newest first, bounded by the host budget.
         if (!o.prefix_cache_dir.empty()) {
             namespace fs = std::filesystem;
