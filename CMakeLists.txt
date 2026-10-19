@@ -140,6 +140,10 @@ if(STRATA_BUILD_CONVERSATION_TESTS)
   add_executable(adaptive_mtp_test src/spec/adaptive_mtp_test.cpp)
   target_include_directories(adaptive_mtp_test PRIVATE include)
   add_test(NAME adaptive_mtp_test COMMAND adaptive_mtp_test)
+
+  add_executable(ngram_mod_test src/spec/ngram_mod_test.cpp)
+  target_include_directories(ngram_mod_test PRIVATE include)
+  add_test(NAME ngram_mod_test COMMAND ngram_mod_test)
 endif()
 
 if(STRATA_HIP_GFX906)

@@ -11,6 +11,7 @@ defaults stay upstream-identical unless noted, and every divergence is listed he
 | STRATA-X console | on (product UI) | static assets under `serve/web/` |
 | Light-expert CPU preference | off | `--light-expert-cpu`, `--light-expert-max-mib` (2) |
 | Adaptive MTP drafts | off | `--mtp-adaptive` (needs `--batch-mtp`) |
+| Shared ngram-mod | off | `--ngram-mod` (needs `--batch-mtp`) |
 
 ## Defaults and rationale
 
@@ -48,3 +49,9 @@ three eligible windows: above 80% token-weighted acceptance grows, below 65% shr
 lookup, EOS, cancel or terminal rounds discard the partial window.  The window is 8 rows, so two
 active slots get at most 3 drafts each and a single active slot gets up to 6.  `STRATA_MTP_ADAPTIVE=1`
 (and the private-fork alias `STRATA_SLOT_MTP_ADAPTIVE=1`) does the same.
+
+`--ngram-mod` allocates one 16 MiB CPU hash table for the whole engine.  Each batch slot keeps its
+own cursor and feedback and proposes 48-64-token chains from its own history; the target verifies
+every token, a chain shorter than 48 tokens falls back to MTP, and five rounds below 25% accepted
+clear that slot's feedback.  `STRATA_NGRAM_MOD=1` and the private alias `STRATA_SLOT_NGRAM_MOD=1`
+select it.  Ported from llama.cpp ngram-mod (MIT).

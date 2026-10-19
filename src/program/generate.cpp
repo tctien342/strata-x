@@ -62,6 +62,7 @@
 #include "strata/core/native_head.hpp"
 #include "strata/core/verify.hpp"
 #include "strata/spec/adaptive_mtp.hpp"
+#include "strata/spec/ngram_mod.hpp"
 #include "strata/core/mtp.hpp"
 #include "strata/prefill/prefill.hpp"
 #if defined(STRATA_PREFILL_MMQ)
@@ -663,6 +664,8 @@ struct Options {
     bool batch_mtp = false;      ///< --batch-mtp / STRATA_BATCH_MTP=1 (opt-in): one MTP proposal per batch slot
     /// Strata-X: adaptive draft depth for batch MTP slots, 3..6 drafts by verified acceptance (80%/65%, 3 rounds).
     bool mtp_adaptive = false;
+    /// Strata-X: one shared 16 MiB n-gram table proposes drafts to every batch slot (opt-in, with --batch-mtp).
+    bool ngram_mod = false;
     std::string spec_oracle;
     int spec_corrupt = 0;
     /// Benchmarks and A/B checks (eddoursul's fork, F19): the run emits this continuation (token ids) instead of
@@ -899,6 +902,8 @@ void usage() {
                  "  --batch-mtp          --batch (opt-in, needs --mtp and --spec): each slot also verifies one MTP proposal per\n"
                  "  --mtp-adaptive       with --batch-mtp (Strata-X, opt-in): 3-6 drafts per slot, growing above 80%%\n"
                  "                       accepted over three windows and shrinking below 65%%\n"
+                 "  --ngram-mod          with --batch-mtp (Strata-X, opt-in): one shared 16 MiB n-gram table proposes\n"
+                 "                       drafts across the slots; MTP proposes whenever the chain is too short\n"
                  "                       window (STRATA_BATCH_MTP=1 does the same); works on one GPU and on a layer split (the\n"
                  "                       slot drafters sit on the last stage's GPU; not with --batch-groups); needs VRAM per slot\n"
                  "  --batch-groups G     --batch with a layer split: the slots in G groups pipelined through the GPUs\n"
@@ -2486,6 +2491,7 @@ int main(int argc, char** argv) {
         }
         else if (a == "--batch-mtp") o.batch_mtp = true;
         else if (a == "--mtp-adaptive") o.mtp_adaptive = true;
+        else if (a == "--ngram-mod") o.ngram_mod = true;
         else if (a == "--spec-oracle") o.spec_oracle = next("--spec-oracle");
         else if (a == "--spec-corrupt") o.spec_corrupt = std::atoi(next("--spec-corrupt"));
         else if (a == "--spec-follow") o.spec_follow = next("--spec-follow");
@@ -5089,6 +5095,12 @@ int main(int argc, char** argv) {
     if (mtp_adaptive_env == nullptr) mtp_adaptive_env = std::getenv("STRATA_SLOT_MTP_ADAPTIVE");
     const bool mtp_adaptive = batch_mtp && (o.mtp_adaptive ||
         (mtp_adaptive_env != nullptr && mtp_adaptive_env[0] != '\0' && mtp_adaptive_env[0] != '0'));
+    const char* ngram_env = std::getenv("STRATA_NGRAM_MOD");
+    if (ngram_env == nullptr) ngram_env = std::getenv("STRATA_SLOT_NGRAM_MOD");
+    const bool ngram_mod_on = batch_mtp && (o.ngram_mod ||
+        (ngram_env != nullptr && ngram_env[0] != '\0' && ngram_env[0] != '0'));
+    std::unique_ptr<strata::spec::NgramMod> ngram_mod_pool;
+    if (ngram_mod_on) ngram_mod_pool = std::make_unique<strata::spec::NgramMod>((int32_t) g.n_vocab);
     if (batch_mtp) {
         // (--pipeline-windows is already off with --batch slots)
         const char* why = o.batch < 2 ? "it needs --batch 2 or more" : o.mtp.empty() ? "it needs --mtp"
@@ -10592,6 +10604,9 @@ int main(int argc, char** argv) {
         if (mtp_adaptive)
             std::printf("INFO mtp_adaptive=1 adaptive_min=3 adaptive_max=6 adaptive_initial=3 adaptive_rounds=3 "
                         "adaptive_grow_percent=80 adaptive_shrink_percent=65\n");
+        if (ngram_mod_pool)
+            std::printf("INFO ngram_mod=1 entries=4194304 bytes=%zu slots=%zu\n",
+                        ngram_mod_pool->size_bytes(), (size_t) o.batch);
         std::printf("READY %lld stop\n", (long long) o.max_context);   // "stop": this engine honours STOP
         std::fflush(stdout);
         std::string line;
@@ -10739,6 +10754,9 @@ int main(int argc, char** argv) {
             bool draft_ready = false;
             int draft_count = 1;           ///< proposals in `draft` (Strata-X adaptive: 0..6)
             strata::spec::AdaptiveMtp adaptive_mtp; ///< per-slot draft depth (Strata-X, opt-in)
+            strata::spec::NgramMod::State ngram_state; ///< this slot's cursor/feedback in the shared table
+            std::vector<int32_t> ngram_hist;           ///< prompt + committed output, current token last
+            bool ngram_seeded = false, draft_lookup = false;
             int64_t p = 0;                 ///< its position
             int64_t produced = 0, max_new = 0;
             Clock::time_point t0;
@@ -11067,6 +11085,7 @@ int main(int argc, char** argv) {
                 for (int j = 0; j < keep[b]; ++j) {
                     const int32_t y = outb[first[t] + j];
                     sl.ids.push_back(tok[first[t] + j]);
+                    if (ngram_mod_pool) sl.ngram_hist.push_back(y);
                     std::printf("BT %d %d\n", b, (int) y);
                     ++sl.produced;
                     const bool eos = std::find(o.eos_ids.begin(), o.eos_ids.end(), (int64_t) y) != o.eos_ids.end();
@@ -11084,10 +11103,12 @@ int main(int argc, char** argv) {
                 }
                 if (batch_mtp) {
                     const int offered = wd[b];
-                    const bool eligible = !sl.stop && offered == sl.adaptive_mtp.depth() &&
+                    const bool eligible = !sl.stop && !sl.draft_lookup && offered == sl.adaptive_mtp.depth() &&
                                           sl.produced + 1 + offered <= sl.max_new &&
                                           sl.p + 1 + offered <= o.max_context;
                     sl.adaptive_mtp.observe(offered, offered, keep[b] - 1, eligible);
+                    if (ngram_mod_pool && sl.draft_lookup)
+                        ngram_mod_pool->observe(sl.ngram_state, keep[b] - 1, offered);
                 }
                 if (batch_mtp && sl.active) {
                     // The slot's two residual rows (the final residuals of the last stage: ver.final_R_all() follows the
@@ -11104,6 +11125,19 @@ int main(int argc, char** argv) {
                                     (int) std::max<int64_t>(0, sl.max_new - sl.produced - 1),
                                     (int) std::max<int64_t>(0, o.max_context - sl.p - 1)})
                         : 1;
+                    bool lookup = false;
+                    if (ngram_mod_pool && !sl.ngram_hist.empty() && want > 0) {
+                        int32_t proposed[strata::kernels::kVerifyMaxT] = {};
+                        const int n = ngram_mod_pool->propose(sl.ngram_state, sl.ngram_hist, want, proposed);
+                        if (n > 0) {
+                            for (int d = 0; d < n; ++d) sl.draft[(size_t) d] = proposed[d];
+                            sl.draft_count = n;
+                            sl.draft_ready = true;
+                            sl.draft_lookup = true;
+                            lookup = true;
+                        }
+                    }
+                    if (lookup) continue;
                     int generated = 0;
                     if (cudaMemcpyAsync(slot_mtp_rows[(size_t) b].get(),
                                         ver.final_R_all() + (size_t) first[t] * stride,
@@ -11114,8 +11148,9 @@ int main(int argc, char** argv) {
                         std::printf("ERR batch MTP slot %d: %s\n", b, err.c_str());
                         return false;
                     }
-                    sl.draft_count = generated;
+                    sl.draft_count = std::min(generated, want);
                     sl.draft_ready = true;
+                    sl.draft_lookup = false;
                 }
             }
             std::fflush(stdout);
@@ -12921,6 +12956,11 @@ int main(int argc, char** argv) {
                         BSlot& sl = bs[(size_t) ys];
                         sl = BSlot{};
                         sl.ids = std::move(pre);
+                        if (ngram_mod_pool) {
+                            ngram_mod_pool->begin(sl.ngram_state, sl.ids);
+                            sl.ngram_hist = sl.ids;
+                            sl.ngram_seeded = true;
+                        }
                         sl.cached = true;
                         sl.partial = true;
                         sl.partial_from0 = read_from == 0 || resumed_from0;
@@ -14742,6 +14782,11 @@ int main(int argc, char** argv) {
                     sl.max_new = admit_max_new;
                     sl.t0 = Clock::now();
                     sl.ids = live;
+                    if (ngram_mod_pool) {
+                        ngram_mod_pool->begin(sl.ngram_state, sl.ids);
+                        sl.ngram_hist = sl.ids;
+                        sl.ngram_seeded = true;
+                    }
                     if (batch_mtp) {
                         if (!slot_mtp[(size_t) admit_slot]->draft_first(1, ver.final_R_all(), sl.x,
                                                                         sl.p - 1, sl.draft.data(), err)) {
@@ -15700,7 +15745,7 @@ int main(int argc, char** argv) {
                 int32_t d = from_sfx ? sbuf[(size_t) i - 1] : use_mtp ? drafts[(size_t) i - 1]
                                                     : at < oracle.size() ? (int32_t) oracle[at] : 0;
                 if (i >= T_mtp) d = cbuf[(size_t) (i - T_mtp)];
-                if (o.spec_corrupt > 0 && (++corrupt_counter % o.spec_corrupt) == 0) d = (d + 1) % (int32_t) n_vocab;
+                if (o.spec_corrupt > 0 && (++corrupt_counter % o.spec_corrupt) == 0) d = (d + 1) % (int32_t) g.n_vocab;
                 window[(size_t) i] = d;
             }
             drive.d.layers = 0;
