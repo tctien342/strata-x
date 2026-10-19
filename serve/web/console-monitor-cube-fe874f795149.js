@@ -294,10 +294,10 @@
       ...requestOutcome(r.finish),
       message:`${fmt(r.prompt_tokens)} prompt · ${fmt(r.reused)} reused · ${fmt(r.output_tokens)} out · PF ${fmt(r.prefill_tok_s)} / DEC ${fmt(r.decode_tok_s,1)} tok/s · ${fmt(r.duration_s,1)}s`}));
     (m.slots||[]).forEach(s=>{
-      const signature=`${s.request_id}:${s.state}`,old=previousSlots.get(s.id);
-      if(old && old!==signature)addEvent({key:`slot:${s.id}:${signature}:${m.time}`,time:m.time,type:"slot",tag:s.state.toUpperCase(),tone:"normal",
-        message:`SLOT ${String(Number(s.id)+1).padStart(2,"0")} · req ${String(s.request_id||"—").slice(-8)} · ${fmt(s.generated||0)} out · ${fmt(s.reused||0)} reused`});
-      previousSlots.set(s.id,signature);
+      const id=s.id??s.slot,signature=`${s.request_id}:${s.state}`,old=previousSlots.get(id);
+      if(old && old!==signature)addEvent({key:`slot:${id}:${signature}`,time:m.time,type:"slot",tag:s.state.toUpperCase(),tone:"normal",
+        message:`SLOT ${String(Number(id)+1).padStart(2,"0")} · req ${String(s.request_id||"—").slice(-8)} · ${fmt(s.generated||0)} out · ${fmt(s.reused||0)} reused`});
+      previousSlots.set(id,signature);
     });
     drawEvents();
   }
