@@ -608,6 +608,9 @@ private:
     static constexpr int64_t kPcieGroupRows = 4;                  // the PCIe call's groups side by side (of <= 16)
     uint8_t* hit_xq_ = nullptr;
     uint8_t* nat_xq_ = nullptr;   // plan v0.3 P6: q8_1 activations for a native pack's grouped experts
+    float* nat_xr_ = nullptr;     // the rotated copy of the expert input (Hadamard-folded gate/up)
+    const float* had_sx_ = nullptr;   // device sign vector for n_embd
+    const float* had_sh_ = nullptr;   // device sign vector for n_ff
     float* hit_xs_ = nullptr;
     void* hit_scratch_ = nullptr;
     float *head_mixed_ = nullptr, *head_inj_ = nullptr, *head_logits_ = nullptr;
