@@ -584,7 +584,7 @@ struct Options {
     /// Strata-X: prefer experts a CPU computes natively and holds in a small blob, as a soft placement prior
     /// (their demand score is scaled down; a hot one still wins GPU space).  Off by default.
     bool light_expert_cpu = false;
-    int light_expert_max_mib = 2;
+    double light_expert_max_mib = 2.0;   // MiB; a fraction lets the gate target one blob tier
     /// R4.2d: **ON by default**, because the measurement is unambiguous and the alternative is known-broken.
     /// Without it, 17 of 10,562 layers had the hit work done when the pool returned; with it, 9,190.  The
     /// A/B arm is `--no-hit-poke`.
@@ -2634,7 +2634,7 @@ int main(int argc, char** argv) {
             o.expert_profile_save_min = std::atof(next("--expert-profile-save-every"));
         else if (a == "--light-expert-cpu") o.light_expert_cpu = true;
         else if (a == "--light-expert-max-mib")
-            o.light_expert_max_mib = std::max(0, std::atoi(next("--light-expert-max-mib")));
+            o.light_expert_max_mib = std::max(0.0, std::atof(next("--light-expert-max-mib")));
         else if (a == "--gpu-stages") o.gpu_stages = true;
         else if (a == "--mmap-experts") o.mmap_experts = true;
         else if (a == "--shared-expert-arena") o.shared_expert_arena = next("--shared-expert-arena");
@@ -4221,7 +4221,7 @@ int main(int argc, char** argv) {
         if (const char* le = std::getenv("STRATA_LIGHT_EXPERT_CPU")) light_expert_on = std::atoi(le) != 0;
         if (light_expert_on) {
             const auto& layout = strata::kernels::cpu::expert_layout();
-            const uint64_t max_blob = (uint64_t) std::max(0, o.light_expert_max_mib) << 20;
+            const uint64_t max_blob = (uint64_t) (std::max(0.0, o.light_expert_max_mib) * 1048576.0);
             auto light = [&](int32_t layer) {
                 if (!layout.native || layer < 0 || (size_t) layer >= layout.fmt.size()) return false;
                 if (layout.blob_bytes(layer) > max_blob) return false;
@@ -4235,7 +4235,7 @@ int main(int argc, char** argv) {
             for (const auto& pair : profile) eligible += light(pair.first) ? 1 : 0;
             profile = strata::core::rank_light_experts(profile, light, true);
             std::fprintf(stderr, "strata generate: light-expert CPU preference: %zu of %zu ranked pairs on native "
-                                 "CPU kernels with blobs <= %d MiB stay behind the GPU's hot set\n",
+                                 "CPU kernels with blobs <= %.2f MiB stay behind the GPU's hot set\n",
                          eligible, profile.size(), o.light_expert_max_mib);
         }
         // Multi-GPU: STRATA_PEER_HOT=<f> gives the peer card a share f of the HOT pairs, so both cards
