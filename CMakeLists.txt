@@ -132,6 +132,10 @@ if(STRATA_BUILD_CONVERSATION_TESTS)
   add_executable(session_save_reclaim_test src/core/session_save_reclaim_test.cpp src/core/conversation_file.cpp)
   target_include_directories(session_save_reclaim_test PRIVATE include)
   add_test(NAME session_save_reclaim_test COMMAND session_save_reclaim_test)
+
+  add_executable(expert_tiers_test src/core/expert_tiers_test.cpp)
+  target_include_directories(expert_tiers_test PRIVATE include)
+  add_test(NAME expert_tiers_test COMMAND expert_tiers_test)
 endif()
 
 if(STRATA_HIP_GFX906)

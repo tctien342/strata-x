@@ -9,6 +9,7 @@ defaults stay upstream-identical unless noted, and every divergence is listed he
 | INT8 rotated K/V | on in the serving layer | run config `env` `STRATA_KV_ROT=0` |
 | Conversation cache | 8192 MiB parked conversations | `conversation_cache_mib` (0 disables) |
 | STRATA-X console | on (product UI) | static assets under `serve/web/` |
+| Light-expert CPU preference | off | `--light-expert-cpu`, `--light-expert-max-mib` (2) |
 
 ## Defaults and rationale
 
@@ -34,3 +35,9 @@ terminal layout, six gauges, conversation-cache settings card and the Three.js r
 cube (vendored locally, `THREE-LICENSE.txt`). Upstream's `app.js` is retained but no longer
 referenced. The upstream engine does not publish per-expert residency telemetry yet, so the
 monitor keeps its honest "awaiting residency telemetry" state instead of inventing cells.
+
+`--light-expert-cpu` reorders a static `--expert-profile` prior only: an expert is eligible when the
+layer format has a native CPU kernel for this geometry AND its per-expert blob is at most
+`--light-expert-max-mib` (default 2).  Eligible experts get a 0.75 demand weight, so the GPU still
+takes a hot one first; routed experts, weights, quantization and budgets are unchanged.  Without a
+profile there is no prior to reorder, so the flag does nothing.
