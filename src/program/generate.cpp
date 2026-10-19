@@ -22,6 +22,7 @@
 #include "strata/core/device.hpp"
 #include "strata/core/remote_expert_opt.hpp"
 #include "strata/core/expert_cache.hpp"
+#include "strata/core/expert_monitor.hpp"
 #include "strata/core/expert_tiers.hpp"
 #include "strata/core/conversation_snapshot.hpp"
 #include "strata/core/conversation_file.hpp"
@@ -1118,6 +1119,8 @@ struct Drive {
     /// needs no locking.  `d.layers` is the CURRENT layer on entry (the adapter increments it as it walks the
     /// blob), which is why the layer index comes from there rather than from a counter of our own.
     std::FILE* routing = nullptr;
+    /// STRATA-X: set when `STRATA_EXPERT_MONITOR=1`; `routed()` is recorded from the pool threads.
+    strata::core::ExpertMonitor* monitor = nullptr;
 };
 
 void drive_pool(void* user, const float* x_f, const int32_t* ids, const float* weights, int64_t n_embd, int64_t k,
@@ -1158,6 +1161,7 @@ void drive_pool_multi(void* user, const float* x_f, const int32_t* ids, int64_t 
     strata::core::expert_pool_dispatch_multi(t->d, x_f, ids, n_tok, k, out);
     t->cpu_ms += std::chrono::duration<double, std::milli>(Clock::now() - a).count();
     ++t->calls;
+    if (t->monitor) t->monitor->routed(layer, ids, n_tok * k);
     // the routing trace for the serve path: the same record format drive_pool writes (layer, k, ids, weights),
     // one record per token.  The multi dispatch fuses the router weights into the kernel and does not surface
     // them, so records carry unit weights: tools/make_profile.py ranks pairs by routed frequency, which is the
@@ -10744,8 +10748,30 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "strata disk prefix: loaded %llu parked conversations from %s (host %.0f MiB)\n",
                          (unsigned long long) loaded, o.prefix_cache_dir.c_str(), (double) host_used / 1048576.0);
         }
+        // STRATA-X: the residency telemetry the console's MoE matrix reads (opaque to everything else).  The map
+        // is copied here and at each batch window, the two places the caches are quiet; `routed` records picks.
+        std::unique_ptr<strata::core::ExpertMonitor> expert_monitor;
+        auto expert_residency = [&]() {
+            std::vector<int32_t> res((size_t) g.n_layers * (size_t) g.n_expert, -1);
+            for (int64_t l = 0; l < g.n_layers; ++l) {
+                const int st = multi_gpu ? stage_of(l) : 0;
+                const strata::core::ExpertCache& xc = st == 0 ? xcache : stages[(size_t) st - 1]->cache;
+                for (int64_t e = 0; e < g.n_expert; ++e)
+                    if (xc.slot_of(l, e) >= 0) res[(size_t) l * (size_t) g.n_expert + (size_t) e] = st;
+            }
+            return res;
+        };
+        if (const char* me = std::getenv("STRATA_EXPERT_MONITOR"); me && std::strcmp(me, "1") == 0 &&
+            g.n_layers * g.n_expert <= 32768) {
+            std::string devices;
+            for (int64_t l = 0; l < g.n_layers; ++l) devices += (l ? "," : "") + std::to_string(multi_gpu ? stage_of(l) : 0);
+            expert_monitor = std::make_unique<strata::core::ExpertMonitor>(g.n_layers, g.n_expert, std::move(devices));
+            expert_monitor->snapshot(expert_residency());
+            drive.monitor = expert_monitor.get();
+        }
         std::printf("READY %lld stop\n", (long long) o.max_context);   // "stop": this engine honours STOP
         std::fflush(stdout);
+        if (expert_monitor) expert_monitor->publish(true);
         std::string line;
         int64_t rounds = 0;
         const int S = o.spec;
@@ -11197,6 +11223,10 @@ int main(int argc, char** argv) {
             auto msd = [](Clock::time_point a0, Clock::time_point b0) { return std::chrono::duration<double, std::milli>(b0 - a0).count(); };
             bt_run += msd(w0, w1);
             bt_commit += msd(w1, w2);
+            if (expert_monitor) {   // a batch window ended: the caches are as quiet as they get, snapshot them
+                expert_monitor->snapshot(expert_residency());
+                expert_monitor->publish();
+            }
             ++bt_windows;
             for (int a = 0; a < A; ++a) {
                 bt_rows += keep[active[a]];
@@ -12781,6 +12811,10 @@ int main(int argc, char** argv) {
                     if (drive.d.failed) return fail(drive.d.fail ? drive.d.fail : "the expert pool failed");
                 }
                 pl_drain();   // nothing in flight: both stages' commits and the drafter's rows have landed
+                if (expert_monitor) {   // STRATA-X: a prompt chunk ended (the map moves most while a prompt is read)
+                    expert_monitor->snapshot(expert_residency());
+                    expert_monitor->publish();
+                }
                 pl_mtp_live[0] = pl_mtp_live[1] = false;
                 const double ms = std::chrono::duration<double, std::milli>(Clock::now() - pp_t0).count();
                 std::printf("PP %lld %lld %.0f %.1f\n", (long long) b, (long long) pp_total, ms,
@@ -14610,6 +14644,10 @@ int main(int argc, char** argv) {
                 if (!ver.run(T, window.data(), p, win_pool_fn, win_pool_user, outv.data(), err) || drive.d.failed) {
                     std::printf("ERR %s\n", drive.d.failed && drive.d.fail ? drive.d.fail : err.c_str());
                     return 1;
+                }
+                if (expert_monitor) {   // STRATA-X: a window ended - the caches are quiet; publish the residency map
+                    expert_monitor->snapshot(expert_residency());
+                    expert_monitor->publish();
                 }
                 if (aflipped) apply_pending(true);   // 0.1.43: every layer's copies were waited for in the window; the bookkeeping now
                 // Diagnostics (as in generate): STRATA_DUMP_FIRST_LOGITS=<path> writes the logits of each request's first

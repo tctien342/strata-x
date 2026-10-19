@@ -67,6 +67,7 @@ from serve.winjob import contain  # noqa: E402
 from serve.structured import StructuredOutputError, prepare_format, validated_json  # noqa: E402
 from serve import responses as responses_api  # noqa: E402
 from serve.responses import ResponsesError, error_body as responses_error_body  # noqa: E402
+from serve.expert_monitor import ExpertMonitor  # noqa: E402
 from serve import images as images_api  # noqa: E402
 
 IM_END = "<|im_end|>"
@@ -819,6 +820,7 @@ class StrataEngine:
         self.max_context = int(args[args.index("--max-context") + 1]) if "--max-context" in args else 4096
         self.can_stop = False            # the engine honours a STOP line mid-request (READY <ctx> stop)
         self.last = {}
+        self.expert_monitor = ExpertMonitor()   # STRATA-X: the ER frames of the console's MoE residency matrix
         self.info = {}                   # INFO key=value facts (engine 0.1.8+): kv, expert slots, ... (Monitor tab)
         self.prefill_tok_s_mean = None
         self.progress = None             # (read, total) prompt tokens while a prompt is read, from PP lines
@@ -993,7 +995,12 @@ class StrataEngine:
         proc, lines = self.proc, self.lines             # this process's: a restart replaces both (#344)
         slot_q = self.slot_q
         line = None
+        expert_monitor = self.expert_monitor
         for line in proc.stdout:
+            # STRATA-X: residency frames are protocol, never log output or a request's own line
+            if line.startswith(("ER ", "EA ")):
+                expert_monitor.accept(line)
+                continue
             # checked before batch routing: a fatal line is never a slot's own
             if line.startswith(FATAL_PREFIXES):
                 # release_gpu_waits invalidates the verifier, even if the native
@@ -1092,6 +1099,7 @@ class StrataEngine:
         close() ends and waits for the old process first (EngineStuck when it cannot be ended).  A start that still
         exits before READY - a dead engine's VRAM can take a while to come back, notably on ROCm - is retried
         (PR #637)."""
+        self.expert_monitor = ExpertMonitor()    # STRATA-X: a dead engine's map must not outlive it
         info = dict(self.info)
         self.starting = True                     # prepare() answers 503 "starting" meanwhile (#344)
         try:
@@ -2889,6 +2897,7 @@ def child_env(cfg: dict) -> dict:
     # Strata-X: INT8 K/V through the Hadamard rotation is the serving default; a run config's "env" block
     # still overrides it (STRATA_KV_ROT=0 keeps the unrotated layout).
     env.setdefault("STRATA_KV_ROT", "1")
+    env.setdefault("STRATA_EXPERT_MONITOR", "1")   # STRATA-X: ER frames for the console's MoE matrix
     dirs = [d for d in cfg.get("lib_dirs") or [] if Path(d).is_dir()]
     if dirs:
         var = "PATH" if os.name == "nt" else "LD_LIBRARY_PATH"
@@ -3813,7 +3822,10 @@ class Service:
                 tel["static"], "history": tel["history"], "time": now,
                 # Strata-X: the console reads per-slot telemetry at the top level (live.slots on upstream);
                 # a solo request is shown as the first slot so the Monitor stays live with one request.
-                "slots": slots_with_solo(live), "slot_queued": live.get("queued", 0)}
+                "slots": slots_with_solo(live), "slot_queued": live.get("queued", 0),
+                # the MoE residency matrix (STRATA-X): real frames from the engine, null when it never sent one
+                "experts": self.engine.expert_monitor.snapshot(self.engine.alive())
+                if hasattr(self.engine, "expert_monitor") else None}
 
     def prometheus(self) -> str:
         """GET /metrics/prometheus: the totals and what is running in Prometheus' text format, under llama-server's

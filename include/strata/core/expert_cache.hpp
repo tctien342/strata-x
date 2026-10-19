@@ -104,6 +104,12 @@ public:
     /// The slots usable now: all of them, unless `shrink` gave the tail's VRAM back (#533) - then the ones wholly
     /// inside the VRAM still backed, always a prefix.  The prompt path's loan (the last slots) and every report
     /// follow this; `full_slots()` is what `open` allocated.
+    /// STRATA-X: the whole `(layer * n_expert + expert) -> slot` table, for the residency telemetry, which copies
+    /// it at its existing mutation boundaries (the same places the cache itself is mutated from).
+    const std::vector<int32_t>& residency_view() const { return residency_; }
+    int64_t layers() const { return n_layers_; }
+    int64_t experts() const { return n_expert_; }
+
     int64_t slots() const { return live_slots_; }
     int64_t full_slots() const { return slots_; }
     /// Slots actually claimed.  Not the same as `slots()` - the cache does not evict, so a run that routes
