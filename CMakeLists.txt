@@ -136,6 +136,10 @@ if(STRATA_BUILD_CONVERSATION_TESTS)
   add_executable(expert_tiers_test src/core/expert_tiers_test.cpp)
   target_include_directories(expert_tiers_test PRIVATE include)
   add_test(NAME expert_tiers_test COMMAND expert_tiers_test)
+
+  add_executable(adaptive_mtp_test src/spec/adaptive_mtp_test.cpp)
+  target_include_directories(adaptive_mtp_test PRIVATE include)
+  add_test(NAME adaptive_mtp_test COMMAND adaptive_mtp_test)
 endif()
 
 if(STRATA_HIP_GFX906)

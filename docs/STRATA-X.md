@@ -10,6 +10,7 @@ defaults stay upstream-identical unless noted, and every divergence is listed he
 | Conversation cache | 8192 MiB parked conversations | `conversation_cache_mib` (0 disables) |
 | STRATA-X console | on (product UI) | static assets under `serve/web/` |
 | Light-expert CPU preference | off | `--light-expert-cpu`, `--light-expert-max-mib` (2) |
+| Adaptive MTP drafts | off | `--mtp-adaptive` (needs `--batch-mtp`) |
 
 ## Defaults and rationale
 
@@ -41,3 +42,9 @@ layer format has a native CPU kernel for this geometry AND its per-expert blob i
 `--light-expert-max-mib` (default 2).  Eligible experts get a 0.75 demand weight, so the GPU still
 takes a hot one first; routed experts, weights, quantization and budgets are unchanged.  Without a
 profile there is no prior to reorder, so the flag does nothing.
+
+`--mtp-adaptive` starts every batch slot at 3 drafts and moves one level between 3 and 6 after
+three eligible windows: above 80% token-weighted acceptance grows, below 65% shrinks, and clipped,
+lookup, EOS, cancel or terminal rounds discard the partial window.  The window is 8 rows, so two
+active slots get at most 3 drafts each and a single active slot gets up to 6.  `STRATA_MTP_ADAPTIVE=1`
+(and the private-fork alias `STRATA_SLOT_MTP_ADAPTIVE=1`) does the same.
