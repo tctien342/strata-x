@@ -21,7 +21,7 @@ class StrataXWeb(unittest.TestCase):
         html = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertIn("STRATA-X", html)
         refs = sorted(set(re.findall(r"web/[A-Za-z0-9._-]+", html)))
-        self.assertIn("web/app-terminal-101393604a53.js", refs)
+        self.assertIn("web/app-terminal-7b237e30cc8b.js", refs)
         self.assertIn("web/expert-cube-cube-19409e0630f7.js", refs)
         for ref in refs:
             self.assertTrue((WEB / ref[len("web/"):]).is_file(), ref)

@@ -140,9 +140,10 @@ function setPill(state, text) {
 
 function render(m) {
   const live = {...m.live}, hw = m.hardware || {}, st = m.hardware_static || {}, eng = m.engine || {};
-  if (m.slots?.length) {
-    const active = m.slots.filter(s => ["waiting", "reading", "generating"].includes(s.state));
-    live.queued = m.slot_queued || 0;
+  const slots = m.slots || live.slots || [];   // upstream /metrics nests them in live.slots
+  if (slots.length) {
+    const active = slots.filter(s => ["waiting", "reading", "generating"].includes(s.state));
+    live.queued = m.slot_queued ?? live.queued ?? 0;
     live.state = active.some(s => s.state === "generating") ? "generating" : active.length ? "reading" : live.state === "unloaded" ? "unloaded" : "idle";
     live.phase = null;
     for (const key of ["generated", "max_tokens", "prompt_tokens", "tok_s"]) live[key] = active.reduce((n, s) => n + (s[key] || 0), 0);
@@ -161,7 +162,7 @@ function render(m) {
     setPill("idle", "Idle");
   }
   if (live.queued > 0) setPill("queued", `${live.queued} queued`);
-  if (tab === "monitor") { StrataMonitor.render({...m, live}, reqShowAll); }
+  if (tab === "monitor") { StrataMonitor.render({...m, live, slots}, reqShowAll); }
   if (tab === "about") renderAbout(eng, hw, st);
 }
 

@@ -3793,7 +3793,9 @@ class Service:
                 "conversation_cache": conversation_cache_view(engine, hist, totals, parked),
                 "requests_kept": len(hist), "totals": totals, "hardware": tel["now"],
                 "hardware_static":
-                tel["static"], "history": tel["history"], "time": now}
+                tel["static"], "history": tel["history"], "time": now,
+                # Strata-X: the console reads per-slot telemetry at the top level (live.slots on upstream)
+                "slots": live.get("slots") or [], "slot_queued": live.get("queued", 0)}
 
     def prometheus(self) -> str:
         """GET /metrics/prometheus: the totals and what is running in Prometheus' text format, under llama-server's
