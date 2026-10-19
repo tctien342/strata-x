@@ -571,10 +571,13 @@ class Telemetry:
                 g["util"] = sum(u) / len(u) if u else None
                 t = vals("temp")
                 g["temp"] = max(t) if t else None
-                s["gpus"] = [{"index": i, "util": r.get("util"), "mem_used": r.get("mem_used"),
-                              "mem_total": r.get("mem_total"), "temp": r.get("temp"), "power": r.get("power")}
-                             for i, r in reads]
             s.update({f"gpu_{k}": v for k, v in g.items()})
+            # Strata-X: each card's own PCIe link and traffic, for the console's per-GPU rows (upstream only
+            # listed the totals, so a split model showed dashes per card).
+            s["gpus"] = [{"index": i, **{k: r.get(k) for k in
+                          ("util", "mem_used", "mem_total", "temp", "power", "power_limit",
+                           "pcie_gen", "pcie_gen_max", "pcie_width", "pcie_rx_mb", "pcie_tx_mb")}}
+                         for i, r in reads]
         if self.ps:
             try:
                 s["cpu"] = self.ps.cpu_percent(interval=None)

@@ -4793,6 +4793,50 @@ IOREG_FIXTURE = '''
 WORKING_SET = 26800603136          # bytes; the M1 Max's device in the fixture above
 
 
+class SplitGpuTelemetry(unittest.TestCase):
+    """Strata-X: every card's own PCIe link and traffic reaches the monitor when the model is split."""
+
+    class Reader:
+        def __init__(self, index):
+            self.index = index
+
+        def ok(self):
+            return True
+
+        def name(self):
+            return f"Fake {self.index}"
+
+        def read(self):
+            return {"util": 10, "mem_used": 1 << 30, "mem_total": 2 << 30, "temp": 40, "power": 5.0,
+                    "power_limit": 150.0, "pcie_gen": 4, "pcie_gen_max": 4, "pcie_width": 16,
+                    "pcie_rx_mb": 12.5, "pcie_tx_mb": 3.0}
+
+    def test_each_card_reports_its_pcie_link(self):
+        from serve import telemetry
+        with mock.patch.object(telemetry, "gpu_reader", lambda index=0, amd=False: self.Reader(index)):
+            t = telemetry.Telemetry(gpu_index=0, gpu_indices=[0, 2])
+            try:
+                s = t.sample()
+            finally:
+                t.close()
+        self.assertEqual([g["index"] for g in s["gpus"]], [0, 2])
+        self.assertEqual([g["pcie_width"] for g in s["gpus"]], [16, 16])
+        self.assertEqual([g["pcie_rx_mb"] for g in s["gpus"]], [12.5, 12.5])
+        self.assertEqual(s["gpu_pcie_rx_mb"], 25.0)          # the totals stay the sum
+        self.assertEqual(t.static["gpu_count"], 2)
+
+    def test_one_card_also_has_a_row(self):
+        from serve import telemetry
+        with mock.patch.object(telemetry, "gpu_reader", lambda index=0, amd=False: self.Reader(index)):
+            t = telemetry.Telemetry(gpu_index=0)
+            try:
+                s = t.sample()
+            finally:
+                t.close()
+        self.assertEqual(s["gpus"][0]["pcie_gen"], 4)
+        self.assertIsNone(s["gpus"][0].get("nothing"))
+
+
 class MacTelemetry(unittest.TestCase):
     """The macOS (Metal backend) reader: IOKit's IOAccelerator nodes and the device's Metal working set."""
 
