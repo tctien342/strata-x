@@ -758,6 +758,23 @@ FATAL_PREFIXES = ("ERR verify: timed out at layer ", "ERR verify batch: timed ou
                   "ERR verify: an earlier window never finished", "ERR verify batch: an earlier window never finished")
 
 
+def slots_with_solo(live: dict) -> list:
+    """Strata-X: a single request runs on the solo path, so every batch slot reports idle while it decodes.
+    Show it as the first slot with the live numbers, or the Monitor reads "last" instead of live."""
+    slots = list(live.get("slots") or [])
+    if not slots or live.get("state") not in ("reading", "generating"):
+        return slots
+    if any(s.get("state") != "idle" for s in slots):
+        return slots
+    solo = dict(slots[0])
+    solo.update(state=live.get("state"), tok_s=live.get("tok_s"), generated=live.get("generated"),
+                max_tokens=live.get("max_tokens"), elapsed_s=live.get("elapsed_s"),
+                prompt_tokens=live.get("prompt_tokens"), prompt_read=live.get("prompt_read"),
+                prefill_tok_s=live.get("prefill_tok_s_mean"), solo=True)
+    slots[0] = solo
+    return slots
+
+
 class StrataEngine:
     """The resident engine: `strata --serve` reads `GEN <max_new> <ids>` lines and streams `T <id>` lines, then
     `DONE ...`.  Requests are serialized by the service's FIFO, so one pipe is enough.
@@ -3794,8 +3811,9 @@ class Service:
                 "requests_kept": len(hist), "totals": totals, "hardware": tel["now"],
                 "hardware_static":
                 tel["static"], "history": tel["history"], "time": now,
-                # Strata-X: the console reads per-slot telemetry at the top level (live.slots on upstream)
-                "slots": live.get("slots") or [], "slot_queued": live.get("queued", 0)}
+                # Strata-X: the console reads per-slot telemetry at the top level (live.slots on upstream);
+                # a solo request is shown as the first slot so the Monitor stays live with one request.
+                "slots": slots_with_solo(live), "slot_queued": live.get("queued", 0)}
 
     def prometheus(self) -> str:
         """GET /metrics/prometheus: the totals and what is running in Prometheus' text format, under llama-server's

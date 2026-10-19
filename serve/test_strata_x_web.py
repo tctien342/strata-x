@@ -16,6 +16,21 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "serve" / "web"
 
 
+class SoloSlotView(unittest.TestCase):
+    def test_solo_request_shows_as_first_slot(self):
+        from serve.server import slots_with_solo
+        idle = {"state": "idle", "slots": [{"slot": 0, "state": "idle"}, {"slot": 1, "state": "idle"}]}
+        self.assertEqual(slots_with_solo(idle), idle["slots"])
+        live = {"state": "generating", "tok_s": 41.5, "generated": 120, "elapsed_s": 3.0,
+                "slots": [{"slot": 0, "state": "idle"}, {"slot": 1, "state": "idle"}]}
+        got = slots_with_solo(live)
+        self.assertEqual(got[0]["state"], "generating")
+        self.assertEqual(got[0]["tok_s"], 41.5)
+        self.assertEqual(got[1]["state"], "idle")
+        busy = {"state": "generating", "slots": [{"slot": 0, "state": "generating", "tok_s": 10}]}
+        self.assertEqual(slots_with_solo(busy), busy["slots"])
+
+
 class StrataXWeb(unittest.TestCase):
     def test_index_assets_exist(self):
         html = (WEB / "index.html").read_text(encoding="utf-8")
