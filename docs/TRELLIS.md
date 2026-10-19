@@ -76,3 +76,12 @@ so every reader of an activation must rotate it first. The pieces:
 has a folded layer, so an IQ pack keeps its old footprint. Rotating the
 wrong copy (or forgetting one) shows up immediately: the model loads and
 runs but emits garbage, which is how this wiring was found.
+
+## The prompt scratch region must count the rotated copy
+
+`moe_set_bytes` sizes the one region both the attention and the MoE halves carve from. A
+folded pack needs one more row there (`Xr`, `T * n_embd` floats) because prefill rotates
+`mixed` into it. Missing that count does not fail loudly: every chunk overruns the region by
+`T * n_embd * 4` bytes, `carve` declines, and the prompt silently drops to a 512-token chunk —
+362 tok/s instead of 1316 at 16K. IQ packs are unaffected (`hadamard_spec().any()` is false).
+Measured after the fix, fresh prefixes: 2158 tokens 408 tok/s, 16019 1317 tok/s, 32579 1741 tok/s.
