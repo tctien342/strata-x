@@ -9096,6 +9096,8 @@ int main(int argc, char** argv) {
                 }
                 const size_t snapshot_bytes = image.bytes();
                 // Strata-X: keep a copy of the parked conversation on disk so a restart can park it again.
+                // A layer split parks one image per stage; upstream session files carry one image, so each
+                // stage is one file `prefix-<hash>-<tokens>-s<stage>.spx` sharing an identity.
                 if (!o.prefix_cache_dir.empty() && !image.live.ids.empty()) {
                     try {
                         strata::core::SessionFileIdentity fid;
@@ -9106,13 +9108,19 @@ int main(int argc, char** argv) {
                             namespace fs = std::filesystem;
                             uint64_t h = 1469598103934665603ull;
                             for (const int32_t t : image.live.ids) { h ^= (uint32_t) t; h *= 1099511628211ull; }
-                            const fs::path path = fs::path(o.prefix_cache_dir) /
-                                ("prefix-" + std::to_string(h) + "-" + std::to_string(image.live.ids.size()) + ".spx");
+                            const std::string base = "prefix-" + std::to_string(h) + "-" +
+                                                     std::to_string(image.live.ids.size());
                             strata::core::SessionWriteOptions wo;
                             wo.min_free_bytes = (uint64_t) std::max<int64_t>(0, o.session_min_free_mib) << 20;
                             size_t written = 0;
                             std::string werr;
-                            if (!strata::core::session_file_write(path.string(), image, fid, written, werr, wo)) {
+                            bool wrote = strata::core::session_file_write(
+                                (fs::path(o.prefix_cache_dir) / (base + "-s0.spx")).string(), image, fid, written, werr, wo);
+                            for (size_t k = 0; wrote && k < image.stage_images.size(); ++k)
+                                wrote = strata::core::session_file_write(
+                                    (fs::path(o.prefix_cache_dir) / (base + "-s" + std::to_string(k + 1) + ".spx")).string(),
+                                    image.stage_images[k], fid, written, werr, wo);
+                            if (!wrote) {
                                 std::fprintf(stderr, "strata disk prefix: write failed: %.200s\n", werr.c_str());
                             } else {
                                 // Newest first: drop the oldest files past the disk budget.
@@ -10665,20 +10673,32 @@ int main(int argc, char** argv) {
                 }).detach();
         }
         // Strata-X: read the parked conversations this namespace parked, newest first, bounded by the host budget.
+        // A group is one conversation: `...-s0.spx` plus `-s1..` stage images; an incomplete group is skipped.
         if (!o.prefix_cache_dir.empty()) {
             namespace fs = std::filesystem;
             std::error_code ec;
-            std::vector<std::pair<fs::file_time_type, fs::path>> files;
-            for (auto& e : fs::directory_iterator(o.prefix_cache_dir, ec))
-                if (e.path().extension() == ".spx") files.emplace_back(fs::last_write_time(e.path(), ec), e.path());
-            std::sort(files.rbegin(), files.rend());
+            std::map<std::string, std::map<int, std::pair<fs::file_time_type, fs::path>>> groups;
+            for (auto& e : fs::directory_iterator(o.prefix_cache_dir, ec)) {
+                if (e.path().extension() != ".spx") continue;
+                const std::string name = e.path().stem().string();
+                const size_t dash = name.rfind("-s");
+                if (dash == std::string::npos) continue;
+                int stage = -1;
+                try { stage = std::stoi(name.substr(dash + 2)); } catch (...) { continue; }
+                groups[name.substr(0, dash)][stage] = {fs::last_write_time(e.path(), ec), e.path()};
+            }
+            std::vector<std::pair<fs::file_time_type, std::string>> ordered;
+            for (const auto& g : groups) ordered.push_back({g.second.begin()->second.first, g.first});
+            std::sort(ordered.rbegin(), ordered.rend());
             strata::core::SessionFileIdentity fid;
             std::string ie;
             uint64_t loaded = 0, host_used = 0;
             const uint64_t host_budget = (uint64_t) std::max<int64_t>(0, o.prefix_cache_host_mib) << 20;
             if (session_identity(fid, ie, nullptr)) {
-                for (const auto& f : files) {
+                for (const auto& g : ordered) {
                     if (host_used >= host_budget) break;
+                    const auto& parts = groups[g.second];
+                    if (parts.find(0) == parts.end()) continue;
                     strata::core::SessionReadLimits lim;
                     lim.max_file_bytes = host_budget;
                     lim.admit = [&](uint64_t need, std::string& why) {
@@ -10691,15 +10711,31 @@ int main(int argc, char** argv) {
                         strata::core::SavedConversation image;
                         std::string rerr;
                         size_t rbytes = 0;
-                        if (!strata::core::session_file_read(f.second.string(), fid, image, rbytes, rerr, lim)) {
+                        if (!strata::core::session_file_read(parts.at(0).second.string(), fid, image, rbytes, rerr, lim)) {
                             std::fprintf(stderr, "strata disk prefix: skip %s: %.160s\n",
-                                         f.second.filename().string().c_str(), rerr.c_str());
+                                         parts.at(0).second.filename().string().c_str(), rerr.c_str());
                             continue;
                         }
+                        bool complete = true;
+                        for (int stage = 1; complete; ++stage) {
+                            const auto it = parts.find(stage);
+                            if (it == parts.end()) break;
+                            strata::core::SavedConversation part;
+                            size_t pbytes = 0;
+                            if (!strata::core::session_file_read(it->second.second.string(), fid, part, pbytes, rerr, lim)) {
+                                std::fprintf(stderr, "strata disk prefix: skip stage %d of %s: %.160s\n",
+                                             stage, parts.at(0).second.filename().string().c_str(), rerr.c_str());
+                                complete = false;
+                                break;
+                            }
+                            rbytes += pbytes;
+                            image.stage_images.push_back(std::move(part));
+                        }
+                        if (!complete) continue;
                         if (conversations.put(std::move(image), 0)) { ++loaded; host_used += rbytes; }
                     } catch (const std::exception& e) {
                         std::fprintf(stderr, "strata disk prefix: skip %s: %.160s\n",
-                                     f.second.filename().string().c_str(), e.what());
+                                     parts.at(0).second.filename().string().c_str(), e.what());
                     }
                 }
             } else {
