@@ -29,6 +29,13 @@ class SoloSlotView(unittest.TestCase):
         self.assertEqual(got[1]["state"], "idle")
         busy = {"state": "generating", "slots": [{"slot": 0, "state": "generating", "tok_s": 10}]}
         self.assertEqual(slots_with_solo(busy), busy["slots"])
+        # a solo serve (--batch 1) reports no slots: one synthetic slot keeps the Monitor live
+        solo = {"state": "generating", "tok_s": 33.0, "generated": 12, "prompt_tokens": 210}
+        got = slots_with_solo(solo)
+        self.assertEqual(len(got), 1)
+        self.assertEqual((got[0]["slot"], got[0]["state"], got[0]["tok_s"], got[0]["solo"]),
+                         (0, "generating", 33.0, True))
+        self.assertEqual(slots_with_solo({"state": "idle", "tok_s": None}), [])
 
 
 class StrataXWeb(unittest.TestCase):

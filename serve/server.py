@@ -763,16 +763,20 @@ def slots_with_solo(live: dict) -> list:
     """Strata-X: a single request runs on the solo path, so every batch slot reports idle while it decodes.
     Show it as the first slot with the live numbers, or the Monitor reads "last" instead of live."""
     slots = list(live.get("slots") or [])
-    if not slots or live.get("state") not in ("reading", "generating"):
+    if live.get("state") not in ("reading", "generating"):
         return slots
     if any(s.get("state") != "idle" for s in slots):
         return slots
-    solo = dict(slots[0])
+    # a solo serve (`--batch 1`, or no --batch at all) reports no slots: show its request as slot 0
+    solo = dict(slots[0]) if slots else {"slot": 0}
     solo.update(state=live.get("state"), tok_s=live.get("tok_s"), generated=live.get("generated"),
                 max_tokens=live.get("max_tokens"), elapsed_s=live.get("elapsed_s"),
                 prompt_tokens=live.get("prompt_tokens"), prompt_read=live.get("prompt_read"),
                 prefill_tok_s=live.get("prefill_tok_s_mean"), solo=True)
-    slots[0] = solo
+    if slots:
+        slots[0] = solo
+    else:
+        slots = [solo]
     return slots
 
 
