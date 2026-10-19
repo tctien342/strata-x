@@ -5,6 +5,9 @@
 namespace strata::spec {
 class AdaptiveMtp {
 public:
+    // `start`: the cold depth.  A batch slot grows from 3; a solo request starts at its fixed --spec depth
+    // (stdlib `--spec 7 --mtp-max-t 7` = 6 drafts) and the same 80/65 rule moves it within 3..6.
+    explicit AdaptiveMtp(int start = 3) : depth_(std::clamp(start, 3, 6)) {}
     int depth() const { return depth_; }
     int limit(int budget) const { return std::min(depth_, std::max(0, budget)); }
 

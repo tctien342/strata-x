@@ -909,10 +909,10 @@ void usage() {
                  "                       normally; --batch-mtp waves more through eight-row windows),\n"
                  "                       each slot with its own session (VRAM like the main one); docs/BATCHING.md\n"
                  "  --batch-mtp          --batch (opt-in, needs --mtp and --spec): each slot also verifies one MTP proposal per\n"
-                 "  --mtp-adaptive       with --batch-mtp (Strata-X, opt-in): 3-6 drafts per slot, growing above 80%%\n"
-                 "                       accepted over three windows and shrinking below 65%%\n"
-                 "  --ngram-mod          with --batch-mtp (Strata-X, opt-in): one shared 16 MiB n-gram table proposes\n"
-                 "                       drafts across the slots; MTP proposes whenever the chain is too short\n"
+                 "  --mtp-adaptive       --serve (Strata-X, opt-in): 3-6 drafts, per slot in batch and per request in\n"
+                 "                       solo, growing above 80%% accepted over three windows and shrinking below 65%%\n"
+                 "  --ngram-mod          --serve (Strata-X, opt-in): one shared 16 MiB n-gram table proposes drafts for\n"
+                 "                       the batch slots and for a solo request; MTP proposes when the chain is too short\n"
                  "                       window (STRATA_BATCH_MTP=1 does the same); works on one GPU and on a layer split (the\n"
                  "                       slot drafters sit on the last stage's GPU; not with --batch-groups); needs VRAM per slot\n"
                  "  --batch-groups G     --batch with a layer split: the slots in G groups pipelined through the GPUs\n"
@@ -5113,18 +5113,19 @@ int main(int argc, char** argv) {
     bool batch_mtp = o.batch_mtp || (batch_mtp_env != nullptr && batch_mtp_env[0] != '\0' && batch_mtp_env[0] != '0');
     const char* mtp_adaptive_env = std::getenv("STRATA_MTP_ADAPTIVE");
     if (mtp_adaptive_env == nullptr) mtp_adaptive_env = std::getenv("STRATA_SLOT_MTP_ADAPTIVE");
-    const bool mtp_adaptive = batch_mtp && (o.mtp_adaptive ||
-        (mtp_adaptive_env != nullptr && mtp_adaptive_env[0] != '\0' && mtp_adaptive_env[0] != '0'));
+    const bool mtp_adaptive = o.mtp_adaptive ||
+        (mtp_adaptive_env != nullptr && mtp_adaptive_env[0] != '\0' && mtp_adaptive_env[0] != '0');
     const char* ngram_env = std::getenv("STRATA_NGRAM_MOD");
     if (ngram_env == nullptr) ngram_env = std::getenv("STRATA_SLOT_NGRAM_MOD");
-    const bool ngram_mod_on = batch_mtp && (o.ngram_mod ||
-        (ngram_env != nullptr && ngram_env[0] != '\0' && ngram_env[0] != '0'));
+    const bool ngram_mod_on = o.ngram_mod ||
+        (ngram_env != nullptr && ngram_env[0] != '\0' && ngram_env[0] != '0');
     std::unique_ptr<strata::spec::NgramMod> ngram_mod_pool;
     if (ngram_mod_on) ngram_mod_pool = std::make_unique<strata::spec::NgramMod>((int32_t) g.n_vocab);
     if (mtp_adaptive)
-        std::fprintf(stderr, "strata-x mtp-adaptive: enabled=1 min=3 max=6 rounds=3 grow=80 shrink=65\n");
+        std::fprintf(stderr, "strata-x mtp-adaptive: enabled=1 min=3 max=6 rounds=3 grow=80 shrink=65 batch=%d solo=%d\n",
+                     (int) o.batch, o.batch == 0 ? 1 : 0);
     if (ngram_mod_pool)
-        std::fprintf(stderr, "strata-x ngram-mod: enabled=1 bytes=%zu slots=%d\n",
+        std::fprintf(stderr, "strata-x ngram-mod: enabled=1 bytes=%zu batch=%d\n",
                      ngram_mod_pool->size_bytes(), (int) o.batch);
     if (batch_mtp) {
         // (--pipeline-windows is already off with --batch slots)
@@ -13822,6 +13823,7 @@ int main(int argc, char** argv) {
             strata::spec::PromptLookupSource lookup_src(sfx);
             static const bool chain_fixed = std::getenv("STRATA_LOOKUP_CHAIN_FIXED") != nullptr;   // no policy gate
             int64_t draft_offered = 0, draft_accepted = 0;
+            int64_t ngram_offered = 0, ngram_accepted = 0;   // STRATA-X: the solo n-gram chain's own counts
             // what the session holds once this request is done: the prompt read so far, then every committed token
             std::vector<int32_t> consumed;
             consumed.reserve((size_t) (n + max_new + S));
@@ -14509,11 +14511,21 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "strata pipeline calibration (p_on decile: on/scored):%s\n", cal.c_str());
                 }
             }
+            // STRATA-X: the adaptive depth and the shared n-gram pool for the SOLO decode (they were batch-only).
+            strata::spec::AdaptiveMtp solo_adaptive(mtp_adaptive ? S_mtp - 1 : 3);
+            strata::spec::NgramMod::State ngram_state;
+            std::vector<int32_t> ngram_hist, ngram_buf((size_t) S, 0);
+            if (ngram_mod_pool) {
+                ngram_hist.reserve(ids.size() + 64);
+                for (int64_t t : ids) ngram_hist.push_back((int32_t) t);   // prompt, current input token last
+                ngram_mod_pool->begin(ngram_state, ngram_hist);
+            }
             while (!pl_ran && !cancelled && produced_n < max_new) {
-                int T = use_mtp ? S_mtp : 1;   // no --mtp: one token a round unless a lookup draft fires
+                const int T_cap = use_mtp ? std::min(S_mtp, mtp_adaptive ? 1 + solo_adaptive.depth() : S_mtp) : 1;
+                int T = T_cap;   // no --mtp: one token a round unless a lookup draft fires
                 if (use_mtp && req_spec_min_p > 0.0) {
                     T = 1;
-                    while (T < S_mtp && dprob[(size_t) T - 1] >= (float) req_spec_min_p) ++T;
+                    while (T < T_cap && dprob[(size_t) T - 1] >= (float) req_spec_min_p) ++T;
                 }
                 if (first_window) T = merge_T > 0 ? merge_T : 1;
                 const bool merged = first_window && merge_T > 0;   // the prompt's last tokens and the first token
@@ -14546,6 +14558,11 @@ int main(int argc, char** argv) {
                 }
                 const int T_mtp = T;
                 T += chain_n;
+                int ngram_n = 0;   // STRATA-X: the shared n-gram chain after the MTP's drafts and the lookup chain
+                if (ngram_mod_pool && !first_window && T < S) {
+                    ngram_n = ngram_mod_pool->propose(ngram_state, ngram_hist, std::min(S - T, 8), ngram_buf.data());
+                    T += ngram_n;
+                }
                 const bool timed_round = !first_window;
                 const Clock::time_point round0 = Clock::now();
                 if (p + T > o.max_context) break;
@@ -14555,6 +14572,7 @@ int main(int argc, char** argv) {
                                          : from_sfx ? sbuf[(size_t) i - 1]
                                                     : drafts[(size_t) i - 1];
                 for (int i = 0; i < chain_n; ++i) window[(size_t) (T_mtp + i)] = cbuf[(size_t) i];
+                for (int i = 0; i < ngram_n; ++i) window[(size_t) (T_mtp + chain_n + i)] = ngram_buf[(size_t) i];
                 drive.d.layers = 0;
                 drive.d.experts = 0;
                 drive.d.failed = false;
@@ -14668,6 +14686,20 @@ int main(int argc, char** argv) {
                 while (a < T - 1 && window[(size_t) a + 1] == outv[(size_t) a]) ++a;
                 if (from_sfx) { ++sfx_windows; sfx_drafts += T - 1; sfx_ok += a; }
                 if (chain_n > 0) { ++chain_windows; chain_drafts += chain_n; chain_ok += std::max(0, a - (T_mtp - 1)); }
+                if (ngram_n > 0) {   // STRATA-X: feedback is the verified prefix, not the whole chain
+                    const int ng_ok = std::max(0, a - (T_mtp - 1) - chain_n);
+                    ngram_offered += ngram_n;
+                    ngram_accepted += ng_ok;
+                    ngram_mod_pool->observe(ngram_state, ng_ok, ngram_n);
+                }
+                if (use_mtp && !merged && !first_window && !from_sfx && chain_n == 0 && ngram_n == 0) {
+                    // STRATA-X: a pure-MTP solo round feeds the adaptive depth (as a batch slot does)
+                    const int offered_drafts = T_mtp - 1;
+                    const bool eligible = offered_drafts == solo_adaptive.depth() && offered_drafts > 0 &&
+                                          produced_n + 1 + offered_drafts <= max_new &&
+                                          p + 1 + offered_drafts <= o.max_context;
+                    solo_adaptive.observe(offered_drafts, offered_drafts, a, eligible);
+                }
                 if (!from_sfx && !first_window)
                     for (int d = 0; d < T_mtp - 1 && d < 8 && d <= a; ++d) { ++dp_tested[d]; dp_ok[d] += d < a; }
                 if (strata::core::MtpDrafter::top2_env() && !from_sfx && !first_window && a < T_mtp - 1 && a < 8) {
@@ -14712,6 +14744,7 @@ int main(int argc, char** argv) {
                     std::printf("T %d\n", (int) outv[(size_t) i]);
                     strata::core::progress_beat();
                     ++produced_n;
+                    if (ngram_mod_pool && !merged) ngram_hist.push_back(outv[(size_t) i]);
                     if (sfx_on) sfx.append(outv[(size_t) i]);
                     if (o.lookup_chain > 0) extra_sources_append(&outv[(size_t) i], 1);
                     eos = std::find(o.eos_ids.begin(), o.eos_ids.end(), (int64_t) outv[(size_t) i]) != o.eos_ids.end();
@@ -14724,8 +14757,11 @@ int main(int argc, char** argv) {
                 // commit, outv[a] is its row 0) - the drafts extend it on the device as the verify rows will
                 if (use_mtp && hist_n > 0 && mtp.coupled() && !eos && produced_n < max_new)
                     mtp.set_draft_history(consumed.data(), (int64_t) consumed.size(), outv[(size_t) a]);
+                // the next window's draft count: the adaptive depth (a clipped window can accept below it, so keep a+1)
+                const int draft_T = !use_mtp ? T
+                                  : std::min(S_mtp, std::max(mtp_adaptive ? 1 + solo_adaptive.depth() : T, a + 1));
                 const bool drafted = !use_mtp || eos || produced_n >= max_new ||
-                                     mtp.draft(T, outv.data(), p, a, drafts.data(), err, dprob.data(), (float) req_spec_min_p);
+                                     mtp.draft(draft_T, outv.data(), p, a, drafts.data(), err, dprob.data(), (float) req_spec_min_p);
                 {
                     const Clock::time_point tw3 = Clock::now();
                     auto msd = [](Clock::time_point a0, Clock::time_point b0) { return std::chrono::duration<double, std::milli>(b0 - a0).count(); };
@@ -15062,6 +15098,10 @@ int main(int argc, char** argv) {
                          prompt_ms > 0 ? 1000.0 * read_n / prompt_ms : 0.0, (long long) produced_n, decode_ms,
                          decode_ms > 0 ? 1000.0 * produced_n / decode_ms : 0.0, (long long) draft_accepted,
                          (long long) draft_offered, checks.size(), cancelled ? " (cancelled)" : "");
+            if (mtp_adaptive || ngram_mod_pool)
+                std::fprintf(stderr, "strata-x solo spec: adaptive_depth=%d ngram_offered=%lld ngram_accepted=%lld\n",
+                             mtp_adaptive ? solo_adaptive.depth() : 0,
+                             (long long) ngram_offered, (long long) ngram_accepted);
             // the VRAM share of the experts the pool looked up while decoding; experts it sent over PCIe for the GPU
             // to read (--pcie-frac) are in neither count - #588: so that share is said beside it (raising --pcie-frac
             // raises the hit rate while the PCIe reads may make the decode slower)

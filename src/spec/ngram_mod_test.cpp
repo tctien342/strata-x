@@ -33,14 +33,17 @@ int main() {
         check(n == cap && out[cap] == -9, "a proposal writes only the owner's capacity");
     }
     {
-        NgramMod small(1000000, 1024);
+        // a key this table never learned proposes nothing (the pool is 16 MiB, so the miss is a real miss)
         NgramMod::State s;
-        small.begin(s, full);
-        check(small.propose(s, key, 8, out) == 0, "a table without the chain proposes nothing");
+        pool.begin(s, full);
+        const auto other = sequence(500, 24);
+        check(pool.propose(s, other, 8, out) == 0, "a key without the chain proposes nothing");
     }
     {
+        // `learned` counts the history beyond one match window: a key of exactly 24 tokens has nothing to learn
         NgramMod::State s;
-        pool.begin(s, key);
+        const auto key40 = sequence(100, 40);
+        pool.begin(s, key40);
         for (int n = 0; n < 4; ++n) pool.observe(s, 0, 4);
         check(s.low == 4 && s.learned != 0, "four weak rounds keep the table");
         pool.observe(s, 0, 4);

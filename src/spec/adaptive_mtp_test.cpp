@@ -7,6 +7,9 @@ int main() {
     auto full_window = [](AdaptiveMtp& p) { const int d = p.depth(); for (int n = 0; n < 3; ++n) p.observe(d, d, d, true); };
     AdaptiveMtp p, peer;
     check(p.depth() == 3, "cold depth");
+    AdaptiveMtp solo(6), clipped(9);
+    check(solo.depth() == 6, "solo starts at its fixed depth");
+    check(clipped.depth() == 6, "a start above six clamps to six");
     p.observe(3, 3, 2, true); p.observe(3, 3, 2, true);
     check(p.depth() == 3, "wait for three rounds");
     p.observe(3, 3, 2, true);
