@@ -727,6 +727,10 @@ struct Options {
     /// conversation_cache_slots whatever its length, so without it a client that interleaves short side requests
     /// with one long conversation evicts the long one (oldest first).  0 = park every conversation.
     int64_t conversation_cache_min_tokens = 0;
+    /// Strata-X: park the host conversation cache through disk so prefixes survive a restart.
+    std::string prefix_cache_dir;        // empty: off
+    int64_t prefix_cache_mib = 10240;    // disk budget for the files
+    int64_t prefix_cache_host_mib = 2048; // most a startup load may read into host RAM
     /// --serve: park only after the conversation has advanced this many tokens past the copy it would supersede.
     /// A conversation that moved a few hundred tokens writes a full snapshot again, and the turn after that drops it
     /// (drop_superseded) after writing the same bytes once more, so on a long single conversation every turn pays a
@@ -880,6 +884,10 @@ void usage() {
                  "  --prompt-cache N     --serve: keep N conversation checkpoints between requests (default 6, ~118 MB\n"
                  "                       of RAM each; 0 = read every prompt from the start)\n"
                  "  --conversation-cache-mib N  --serve: RAM budget for parked conversations (default 0 = off)\n"
+                 "  --prefix-cache-dir P --serve (Strata-X, opt-in): also park conversations to disk under P,\n"
+                 "                       so their prefixes survive a restart (needs --conversation-cache-mib)\n"
+                 "  --prefix-cache-mib N  disk budget for those files (default 10240 MiB)\n"
+                 "  --prefix-cache-host-mib N  most the startup load may read into RAM (default 2048 MiB)\n"
                  "  --conversation-cache-slots N  --serve: at most N parked conversations (default 4)\n"
                  "  --conversation-cache-min-free-mib N  --serve: RAM floor (under MemAvailable, the cgroup limits and\n"
                  "                       --memory-limit-mib) when parking, saving or restoring a session (default 2560)\n"
@@ -2513,10 +2521,12 @@ int main(int argc, char** argv) {
         else if (a == "--serve") o.serve = true;
         else if (a == "--vision") o.vision = true;
         else if (a == "--session-save-reclaim") o.session_save_reclaim = true;
+        else if (a == "--prefix-cache-dir") o.prefix_cache_dir = next("--prefix-cache-dir");
         else if (a == "--prompt-cache") o.prompt_cache = std::max(0, std::atoi(next("--prompt-cache")));
         else if (a == "--conversation-cache-mib" || a == "--conversation-cache-slots" ||
                  a == "--conversation-cache-min-free-mib" || a == "--conversation-cache-min-tokens" ||
-                 a == "--conversation-cache-park-gain" ||
+                 a == "--conversation-cache-park-gain" || a == "--prefix-cache-mib" ||
+                 a == "--prefix-cache-host-mib" ||
                  a == "--session-min-free-mib" || a == "--memory-limit-mib") {
             const std::string value = next(a.c_str());
             int64_t number = 0;
@@ -2529,6 +2539,8 @@ int main(int argc, char** argv) {
                 return 2;
             }
             if (a == "--conversation-cache-mib") o.conversation_cache_mib = number;
+            else if (a == "--prefix-cache-mib") o.prefix_cache_mib = number;
+            else if (a == "--prefix-cache-host-mib") o.prefix_cache_host_mib = number;
             else if (a == "--conversation-cache-min-free-mib") o.conversation_cache_min_free_mib = number;
             else if (a == "--conversation-cache-min-tokens") o.conversation_cache_min_tokens = number;
             else if (a == "--conversation-cache-park-gain") o.conversation_cache_park_gain = number;
@@ -2757,6 +2769,10 @@ int main(int argc, char** argv) {
                              (long long) o.conversation_cache_min_free_mib);
             }
         }
+    }
+    if (!o.prefix_cache_dir.empty() && (!o.serve || o.conversation_cache_mib <= 0)) {
+        std::fprintf(stderr, "strata disk prefix: --prefix-cache-dir needs --serve and --conversation-cache-mib\n");
+        return 2;
     }
     if (o.serve && o.conversation_cache_mib > 0 && (o.prompt_cache == 0 || o.conversation_cache_slots == 0))
         std::fprintf(stderr, "strata serve: warning: conversation caching is disabled by %s\n",
@@ -9074,6 +9090,48 @@ int main(int argc, char** argv) {
                     return true;
                 }
                 const size_t snapshot_bytes = image.bytes();
+                // Strata-X: keep a copy of the parked conversation on disk so a restart can park it again.
+                if (!o.prefix_cache_dir.empty() && !image.live.ids.empty()) {
+                    try {
+                        strata::core::SessionFileIdentity fid;
+                        std::string ie;
+                        if (!session_identity(fid, ie, nullptr)) {
+                            std::fprintf(stderr, "strata disk prefix: identity failed: %s\n", ie.c_str());
+                        } else {
+                            namespace fs = std::filesystem;
+                            uint64_t h = 1469598103934665603ull;
+                            for (const int32_t t : image.live.ids) { h ^= (uint32_t) t; h *= 1099511628211ull; }
+                            const fs::path path = fs::path(o.prefix_cache_dir) /
+                                ("prefix-" + std::to_string(h) + "-" + std::to_string(image.live.ids.size()) + ".spx");
+                            strata::core::SessionWriteOptions wo;
+                            wo.min_free_bytes = (uint64_t) std::max<int64_t>(0, o.session_min_free_mib) << 20;
+                            size_t written = 0;
+                            std::string werr;
+                            if (!strata::core::session_file_write(path.string(), image, fid, written, werr, wo)) {
+                                std::fprintf(stderr, "strata disk prefix: write failed: %.200s\n", werr.c_str());
+                            } else {
+                                // Newest first: drop the oldest files past the disk budget.
+                                std::error_code ec;
+                                std::vector<std::pair<fs::file_time_type, fs::path>> files;
+                                uint64_t total = 0;
+                                for (auto& e : fs::directory_iterator(o.prefix_cache_dir, ec))
+                                    if (e.path().extension() == ".spx") {
+                                        total += (uint64_t) fs::file_size(e.path(), ec);
+                                        files.emplace_back(fs::last_write_time(e.path(), ec), e.path());
+                                    }
+                                std::sort(files.begin(), files.end());
+                                const uint64_t budget = (uint64_t) std::max<int64_t>(0, o.prefix_cache_mib) << 20;
+                                for (const auto& f : files) {
+                                    if (total <= budget) break;
+                                    const uint64_t n = (uint64_t) fs::file_size(f.second, ec);
+                                    if (fs::remove(f.second, ec)) total -= std::min(total, n);
+                                }
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        std::fprintf(stderr, "strata disk prefix: skipped: %.200s\n", e.what());
+                    }
+                }
                 const bool stored = conversations.put(std::move(image), held);
                 std::fprintf(stderr, "strata serve: conversation cache: %s %zu tokens in %.1f ms; parked=%zu bytes=%zu evictions=%zu snapshot_bytes=%zu reused_kv_bytes=%zu\n",
                              stored ? "parked" : "skipped", live.size(),
@@ -10607,6 +10665,50 @@ int main(int argc, char** argv) {
         if (ngram_mod_pool)
             std::printf("INFO ngram_mod=1 entries=4194304 bytes=%zu slots=%zu\n",
                         ngram_mod_pool->size_bytes(), (size_t) o.batch);
+        // Strata-X: read the parked conversations this namespace parked, newest first, bounded by the host budget.
+        if (!o.prefix_cache_dir.empty()) {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            std::vector<std::pair<fs::file_time_type, fs::path>> files;
+            for (auto& e : fs::directory_iterator(o.prefix_cache_dir, ec))
+                if (e.path().extension() == ".spx") files.emplace_back(fs::last_write_time(e.path(), ec), e.path());
+            std::sort(files.rbegin(), files.rend());
+            strata::core::SessionFileIdentity fid;
+            std::string ie;
+            uint64_t loaded = 0, host_used = 0;
+            const uint64_t host_budget = (uint64_t) std::max<int64_t>(0, o.prefix_cache_host_mib) << 20;
+            if (session_identity(fid, ie, nullptr)) {
+                for (const auto& f : files) {
+                    if (host_used >= host_budget) break;
+                    strata::core::SessionReadLimits lim;
+                    lim.max_file_bytes = host_budget;
+                    lim.admit = [&](uint64_t need, std::string& why) {
+                        if (need > host_budget - std::min(host_budget, host_used)) { why = "host budget"; return false; }
+                        return strata::core::conversation_memory_admit(
+                            strata::core::available_host_bytes(), need,
+                            (uint64_t) std::max<int64_t>(0, o.conversation_cache_min_free_mib) << 20);
+                    };
+                    try {
+                        strata::core::SavedConversation image;
+                        std::string rerr;
+                        size_t rbytes = 0;
+                        if (!strata::core::session_file_read(f.second.string(), fid, image, rbytes, rerr, lim)) {
+                            std::fprintf(stderr, "strata disk prefix: skip %s: %.160s\n",
+                                         f.second.filename().string().c_str(), rerr.c_str());
+                            continue;
+                        }
+                        if (conversations.put(std::move(image), 0)) { ++loaded; host_used += rbytes; }
+                    } catch (const std::exception& e) {
+                        std::fprintf(stderr, "strata disk prefix: skip %s: %.160s\n",
+                                     f.second.filename().string().c_str(), e.what());
+                    }
+                }
+            } else {
+                std::fprintf(stderr, "strata disk prefix: identity failed: %s\n", ie.c_str());
+            }
+            std::fprintf(stderr, "strata disk prefix: loaded %llu parked conversations from %s (host %.0f MiB)\n",
+                         (unsigned long long) loaded, o.prefix_cache_dir.c_str(), (double) host_used / 1048576.0);
+        }
         std::printf("READY %lld stop\n", (long long) o.max_context);   // "stop": this engine honours STOP
         std::fflush(stdout);
         std::string line;
@@ -15745,7 +15847,7 @@ int main(int argc, char** argv) {
                 int32_t d = from_sfx ? sbuf[(size_t) i - 1] : use_mtp ? drafts[(size_t) i - 1]
                                                     : at < oracle.size() ? (int32_t) oracle[at] : 0;
                 if (i >= T_mtp) d = cbuf[(size_t) (i - T_mtp)];
-                if (o.spec_corrupt > 0 && (++corrupt_counter % o.spec_corrupt) == 0) d = (d + 1) % (int32_t) g.n_vocab;
+                if (o.spec_corrupt > 0 && (++corrupt_counter % o.spec_corrupt) == 0) d = (d + 1) % (int32_t) n_vocab;
                 window[(size_t) i] = d;
             }
             drive.d.layers = 0;

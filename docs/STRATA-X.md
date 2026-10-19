@@ -12,6 +12,7 @@ defaults stay upstream-identical unless noted, and every divergence is listed he
 | Light-expert CPU preference | off | `--light-expert-cpu`, `--light-expert-max-mib` (2) |
 | Adaptive MTP drafts | off | `--mtp-adaptive` (needs `--batch-mtp`) |
 | Shared ngram-mod | off | `--ngram-mod` (needs `--batch-mtp`) |
+| Disk prefix persistence | off | `--prefix-cache-dir`, `--prefix-cache-mib` (10240), `--prefix-cache-host-mib` (2048) |
 
 ## Defaults and rationale
 
@@ -55,3 +56,10 @@ own cursor and feedback and proposes 48-64-token chains from its own history; th
 every token, a chain shorter than 48 tokens falls back to MTP, and five rounds below 25% accepted
 clear that slot's feedback.  `STRATA_NGRAM_MOD=1` and the private alias `STRATA_SLOT_NGRAM_MOD=1`
 select it.  Ported from llama.cpp ngram-mod (MIT).
+
+`--prefix-cache-dir` (needs `--serve` and `--conversation-cache-mib`) writes every parked conversation to that
+directory through the upstream session-file format: atomic rename, identity+config fingerprint, payload hash.
+Startup reads the newest files first into the same RAM conversation cache, bounded by
+`--prefix-cache-host-mib` and the existing memory-admission floor; the disk budget evicts the oldest files.
+Reuse semantics are the upstream cache's (including borrowing a shared system prefix); corrupt, foreign or
+tampered files are refused by the reader and skipped.
