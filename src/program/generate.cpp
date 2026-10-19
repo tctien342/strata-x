@@ -11221,11 +11221,13 @@ int main(int argc, char** argv) {
                         ? std::min<int>(strata::kernels::kVerifyMaxT - 2,
                                         std::max(0, (strata::kernels::kVerifyMaxT - A) / std::max(A, 1)))
                         : 1;
-                    const int want = mtp_adaptive
+                    int want = mtp_adaptive
                         ? std::min({sl.adaptive_mtp.limit(next_per),
                                     (int) std::max<int64_t>(0, sl.max_new - sl.produced - 1),
                                     (int) std::max<int64_t>(0, o.max_context - sl.p - 1)})
                         : 1;
+                    if (want > 0 && (sl.max_new - sl.produced - 1 <= 0 || o.max_context - sl.p - 1 <= 0))
+                        want = 0;
                     bool lookup = false;
                     if (ngram_mod_pool && !sl.ngram_hist.empty() && want > 0) {
                         int32_t proposed[strata::kernels::kVerifyMaxT] = {};
@@ -11239,17 +11241,27 @@ int main(int argc, char** argv) {
                         }
                     }
                     if (lookup) continue;
+                    if (want <= 0) {   // no room left for a proposal: the next window decodes one row
+                        sl.draft_count = 0;
+                        sl.draft_ready = true;
+                        sl.draft_lookup = false;
+                        continue;
+                    }
+                    // `a` (the accepted row) must be below T; a clipped window can accept more rows than the
+                    // next budget asks for, so T covers both.
+                    const int T = std::min(slot_mtp[(size_t) b]->max_t(),
+                                           std::max(1 + want, keep[b]));
                     int generated = 0;
                     if (cudaMemcpyAsync(slot_mtp_rows[(size_t) b].get(),
                                         ver.final_R_all() + (size_t) first[t] * stride,
                                         (size_t) keep[b] * stride * sizeof(float), cudaMemcpyDeviceToDevice,
                                         slot_mtp[(size_t) b]->stream()) != cudaSuccess ||
-                        !slot_mtp[(size_t) b]->draft(1 + want, outb + first[t], pos[first[t]], keep[b] - 1,
+                        !slot_mtp[(size_t) b]->draft(T, outb + first[t], pos[first[t]], keep[b] - 1,
                                                     sl.draft.data(), err, nullptr, 0.0f, &generated)) {
                         std::printf("ERR batch MTP slot %d: %s\n", b, err.c_str());
                         return false;
                     }
-                    sl.draft_count = std::min(generated, want);
+                    sl.draft_count = std::min(generated, T - 1);
                     sl.draft_ready = true;
                     sl.draft_lookup = false;
                 }
