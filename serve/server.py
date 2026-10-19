@@ -2866,6 +2866,9 @@ def child_env(cfg: dict) -> dict:
         env["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in ordered_gpus(cfg))
     for k, v in (cfg.get("env") or {}).items():      # engine settings the config carries (AMD: the GEMM tuning table)
         env[str(k)] = str(v)
+    # Strata-X: INT8 K/V through the Hadamard rotation is the serving default; a run config's "env" block
+    # still overrides it (STRATA_KV_ROT=0 keeps the unrotated layout).
+    env.setdefault("STRATA_KV_ROT", "1")
     dirs = [d for d in cfg.get("lib_dirs") or [] if Path(d).is_dir()]
     if dirs:
         var = "PATH" if os.name == "nt" else "LD_LIBRARY_PATH"

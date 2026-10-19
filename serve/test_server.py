@@ -1655,6 +1655,14 @@ class GpuChoice(unittest.TestCase):
         self.assertEqual(plain.get("CUDA_VISIBLE_DEVICES"), os.environ.get("CUDA_VISIBLE_DEVICES"))
         self.assertEqual(plain.get("CUDA_DEVICE_ORDER"), os.environ.get("CUDA_DEVICE_ORDER"))
 
+    def test_strata_x_rotated_kv_default(self):
+        """Strata-X: the INT8 K/V rotation is the serving default; a config env still turns it off."""
+        from serve.server import child_env
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("STRATA_KV_ROT", None)
+            self.assertEqual(child_env({})["STRATA_KV_ROT"], "1")
+            self.assertEqual(child_env({"env": {"STRATA_KV_ROT": "0"}})["STRATA_KV_ROT"], "0")
+
     def test_card_order(self):
         """#1352: with an auto layer split the faster card (SMs x clock) goes last; ties, a manual split, a
         measurement we lack, HIP and "gpu_order": "as_given" keep the config's order."""

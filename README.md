@@ -13,6 +13,10 @@ Strata runs **[Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Nex
 large, smart AI model that usually needs a server. It chats, writes code, reads pictures and works with your apps
 and coding agents. Nothing leaves your PC.
 
+**Strata-X fork.** This branch is the owner's fork of upstream, rebuilt on `0.1.45` with a short
+list of opt-in additions. See [docs/STRATA-X.md](docs/STRATA-X.md) for the divergences, defaults and
+rebase policy.
+
 ## How fast is it?
 
 We measured it on two ordinary gaming PCs. A token is about ¾ of a word.
