@@ -1220,6 +1220,7 @@ uint64_t moe_set_bytes(size_t T, int64_t n_expert, bool fused) {
     a.take<float>(T * n_expert, ok); a.take<float>(T * K, ok); a.take<int32_t>(T * K, ok); a.take<int32_t>(T * K, ok);
     a.take<int32_t>(T * K, ok);
     if (mp.fallback) a.take<uint16_t>(T * K * N, ok);
+    if (strata::kernels::cpu::hadamard_spec().any()) a.take<float>(T * N, ok);   // Xr (folded packs)
     a.take<float>(mb.gu, ok);
     if (mp.fallback) a.take<uint16_t>(T * K * 640, ok);
     a.take<float>(T * K * N, ok); a.take<float>(T * 640, ok);
