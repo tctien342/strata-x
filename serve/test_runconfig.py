@@ -108,6 +108,14 @@ class Http(unittest.TestCase):
     def saved(self):
         return json.loads(self.path.read_text(encoding="utf-8"))
 
+    def test_strata_x_conversation_cache_setting(self):
+        keys = [k["key"] for k in runconfig.view({}, "x/strata-q2_0.json")["keys"]]
+        self.assertIn("conversation_cache_mib", keys)
+        self.assertEqual(runconfig.check("conversation_cache_mib", 0, {}), 0)
+        self.assertEqual(runconfig.check("conversation_cache_mib", 8192, {}), 8192)
+        with self.assertRaises(ValueError):
+            runconfig.check("conversation_cache_mib", -1, {})
+
     def test_read_and_write_from_the_page(self):
         status, v = self.call("GET")
         self.assertEqual(status, 200, v)

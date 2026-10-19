@@ -7,6 +7,7 @@ defaults stay upstream-identical unless noted, and every divergence is listed he
 | Feature | Default | Control |
 | --- | --- | --- |
 | INT8 rotated K/V | on in the serving layer | run config `env` `STRATA_KV_ROT=0` |
+| Conversation cache | 8192 MiB parked conversations | `conversation_cache_mib` (0 disables) |
 
 ## Defaults and rationale
 
@@ -21,3 +22,8 @@ were qualified with; the unrotated layout remains one config override away.
 - New engine behavior is opt-in unless a serving default is listed in the table above.
 - Ported third-party code keeps its attribution (for example llama.cpp's MIT ngram-mod).
 - No private scheduling/verifier/ownership rewrite: features plug into upstream interfaces.
+
+`conversation_cache_mib` is a Settings key (and a run-config key). `engine_args` appends
+`--conversation-cache-mib` when the config's raw args do not already carry one, so an explicit
+`0` is preserved and an explicit engine argument wins. The engine-side default stays upstream's
+`0` (off); only the serving layer parks conversations by default.

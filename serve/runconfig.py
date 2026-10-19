@@ -36,6 +36,8 @@ EDITABLE = [
     ("open_browser", "bool", "Open the chat page in the browser when the model is ready"),
     ("vram_reserve_mib", ("arg", "--vram-reserve-mib"),
      "VRAM in MiB the engine leaves free for other programs (engine default 700)"),
+    ("conversation_cache_mib", "int>=0",
+     "RAM budget in MiB for parked conversations (Strata-X default 8192 = 8 GiB; 0 disables parking)"),
 ]
 SPEC = {k: kind for k, kind, _ in EDITABLE}
 

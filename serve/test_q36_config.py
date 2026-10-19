@@ -39,6 +39,16 @@ class Q36Config(unittest.TestCase):
         self.assertEqual(engine_args(cfg(vision=v, args=cfg()["args"] + ["--vision"])).count("--vision"), 1)
         self.assertNotIn("--vision", engine_args(cfg()))
 
+    def test_strata_x_conversation_cache_default(self):
+        a = engine_args(cfg())
+        self.assertEqual(a[a.index("--conversation-cache-mib") + 1], "8192")
+        z = engine_args(cfg(conversation_cache_mib=0))
+        self.assertEqual(z[z.index("--conversation-cache-mib") + 1], "0")
+        explicit = cfg(args=cfg()["args"] + ["--conversation-cache-mib", "4096"])
+        e = engine_args(explicit)
+        self.assertEqual(e[e.index("--conversation-cache-mib") + 1], "4096")
+        self.assertEqual(e.count("--conversation-cache-mib"), 1)
+
     def test_an_explicit_batch_in_the_args_wins(self):
         c = cfg(parallel=4, args=cfg()["args"] + ["--batch", "2"])
         self.assertEqual(parallel_args(c, c["args"]), [])

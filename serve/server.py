@@ -2645,6 +2645,9 @@ def engine_args(cfg: dict) -> list[str]:
     config: "auto" by default, or the first layer of each later GPU's share, e.g. "18" or "16,32"; see
     layer_split_value)."""
     args = list(cfg["args"])
+    if "--conversation-cache-mib" not in args:   # Strata-X: 8 GiB of parked conversations unless the config says otherwise
+        n = cfg.get("conversation_cache_mib")
+        args += ["--conversation-cache-mib", str(8192 if n is None else int(n))]
     # #1322: a config with a "vision" section but without --vision in its args (written by an older setup run, or edited by
     # hand) advertised images and then refused every picture ("this engine was started without --vision").  The section
     # says images are wanted: start the engine with them, and keep the encoder's VRAM free as setup does for a GPU encoder
